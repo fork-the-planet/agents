@@ -125,6 +125,11 @@ export function useAgentChat<
   agentUrl.searchParams.delete("_pk");
   const agentUrlString = agentUrl.toString();
 
+  // we need to include agent.name in cache key to prevent collisions during agent switching.
+  // The URL may be stale between updateProperties() and reconnect(), but agent.name
+  // is updated synchronously, so each thread gets its own cache entry
+  const initialMessagesCacheKey = `${agentUrlString}|${agent.agent ?? ""}|${agent.name ?? ""}`;
+
   // Keep a ref to always point to the latest agent instance
   const agentRef = useRef(agent);
   useEffect(() => {
@@ -165,24 +170,28 @@ export function useAgentChat<
     getInitialMessages || defaultGetInitialMessagesFetch;
 
   function doGetInitialMessages(
-    getInitialMessagesOptions: GetInitialMessagesOptions
+    getInitialMessagesOptions: GetInitialMessagesOptions,
+    cacheKey: string
   ) {
-    if (requestCache.has(agentUrlString)) {
-      return requestCache.get(agentUrlString)! as Promise<ChatMessage[]>;
+    if (requestCache.has(cacheKey)) {
+      return requestCache.get(cacheKey)! as Promise<ChatMessage[]>;
     }
     const promise = getInitialMessagesFetch(getInitialMessagesOptions);
-    requestCache.set(agentUrlString, promise);
+    requestCache.set(cacheKey, promise);
     return promise;
   }
 
   const initialMessagesPromise =
     getInitialMessages === null
       ? null
-      : doGetInitialMessages({
-          agent: agent.agent,
-          name: agent.name,
-          url: agentUrlString
-        });
+      : doGetInitialMessages(
+          {
+            agent: agent.agent,
+            name: agent.name,
+            url: agentUrlString
+          },
+          initialMessagesCacheKey
+        );
   const initialMessages = initialMessagesPromise
     ? use(initialMessagesPromise)
     : (optionsInitialMessages ?? []);
@@ -191,13 +200,15 @@ export function useAgentChat<
     if (!initialMessagesPromise) {
       return;
     }
-    requestCache.set(agentUrlString, initialMessagesPromise!);
+    requestCache.set(initialMessagesCacheKey, initialMessagesPromise!);
     return () => {
-      if (requestCache.get(agentUrlString) === initialMessagesPromise) {
-        requestCache.delete(agentUrlString);
+      if (
+        requestCache.get(initialMessagesCacheKey) === initialMessagesPromise
+      ) {
+        requestCache.delete(initialMessagesCacheKey);
       }
     };
-  }, [agentUrlString, initialMessagesPromise]);
+  }, [initialMessagesCacheKey, initialMessagesPromise]);
 
   const aiFetch = useCallback(
     async (request: RequestInfo | URL, options: RequestInit = {}) => {
