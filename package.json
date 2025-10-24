@@ -19,7 +19,7 @@
     "check": "sherif && prettier --check . && biome lint && npm run typecheck",
     "test": "npm run test -w agents",
     "test:react": "npm run test:react -w agents",
-    "postinstall": "patch-package && playwright install --with-deps chromium",
+    "postinstall": "[ \"$CI\" != \"true\" ] && playwright install --with-deps chromium || true",
     "prepare": "husky"
   },
   "license": "MIT",
