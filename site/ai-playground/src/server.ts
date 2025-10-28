@@ -67,7 +67,12 @@ export class Playground extends AIChatAgent<Env, PlaygroundState> {
   ) {
     const tools = this.mcp.getAITools();
 
-    const workersai = createWorkersAI({ binding: this.env.AI });
+    const workersai = createWorkersAI({
+      binding: this.env.AI,
+      gateway: {
+        id: "playground"
+      }
+    });
 
     await this.ensureDestroy();
     const stream = createUIMessageStream({

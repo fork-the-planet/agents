@@ -1,4 +1,5 @@
 {
+  "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "workers-ai-playground",
   "main": "src/server.ts",
   "compatibility_date": "2025-10-08",
@@ -9,7 +10,8 @@
     "run_worker_first": ["/api/*", "/agents/*"]
   },
   "ai": {
-    "binding": "AI"
+    "binding": "AI",
+    "remote": true
   },
   "durable_objects": {
     "bindings": [
@@ -19,7 +21,6 @@
       }
     ]
   },
-
   "migrations": [
     {
       "new_sqlite_classes": ["Playground"],
