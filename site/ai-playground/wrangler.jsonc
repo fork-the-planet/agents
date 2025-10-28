@@ -1,5 +1,5 @@
 {
-  "name": "ai-playground",
+  "name": "workers-ai-playground",
   "main": "src/server.ts",
   "compatibility_date": "2025-10-08",
   "compatibility_flags": ["nodejs_compat"],
@@ -31,9 +31,8 @@
     "logs": {
       "enabled": true
     }
+  },
+  "vars": {
+    "HOST": "http://localhost:5173"
   }
-  // Optional: Override the auto-detected host
-  // "vars": {
-  //   "HOST": "<DEPLOYED_HOSTNAME>"
-  // }
 }
