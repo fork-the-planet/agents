@@ -5,6 +5,7 @@ import {
   type WorkerTransportOptions
 } from "./worker-transport";
 import { runWithAuthContext, type McpAuthContext } from "./auth-context";
+import type { CORSOptions } from "./types";
 
 export interface CreateMcpHandlerOptions extends WorkerTransportOptions {
   /**
@@ -13,6 +14,21 @@ export interface CreateMcpHandlerOptions extends WorkerTransportOptions {
    * @default "/mcp"
    */
   route?: string;
+  /**
+   * CORS configuration options for handling cross-origin requests.
+   * These options are passed to the WorkerTransport which handles adding
+   * CORS headers to all responses.
+   *
+   * Default values are:
+   * - origin: "*"
+   * - headers: "Content-Type, Accept, Authorization, mcp-session-id, MCP-Protocol-Version"
+   * - methods: "GET, POST, DELETE, OPTIONS"
+   * - exposeHeaders: "mcp-session-id"
+   * - maxAge: 86400
+   *
+   * Provided options will overwrite the defaults.
+   */
+  corsOptions?: CORSOptions;
 }
 
 export type OAuthExecutionContext = ExecutionContext & {
@@ -53,15 +69,11 @@ export function experimental_createMcpHandler(
     };
 
     try {
-      let response: Response;
-
       if (authContext) {
-        response = await runWithAuthContext(authContext, handleRequest);
+        return await runWithAuthContext(authContext, handleRequest);
       } else {
-        response = await handleRequest();
+        return await handleRequest();
       }
-
-      return response;
     } catch (error) {
       console.error("MCP handler error:", error);
 
