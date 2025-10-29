@@ -1,5 +1,5 @@
 {
-  "name": "@cloudflare/app-sdk-demo",
+  "name": "@cloudflare/agents-app-sdk-demo",
   "private": true,
   "type": "module",
   "scripts": {

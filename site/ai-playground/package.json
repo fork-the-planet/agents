@@ -1,5 +1,5 @@
 {
-  "name": "@cloudflare/ai-playground",
+  "name": "@cloudflare/agents-ai-playground",
   "type": "module",
   "private": true,
   "author": "AI Agents Team <1800-agents@cloudflare.com>",
