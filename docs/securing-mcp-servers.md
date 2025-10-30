@@ -49,7 +49,7 @@ Without CSRF protection, an attacker can trick users into approving malicious OA
 app.get("/authorize", async (c) => {
   const { token: csrfToken, setCookie } = generateCSRFProtection();
 
-  return renderApprovalDialog(c.req.raw, {
+  return renderConsentDialog(c.req.raw, {
     client: await c.env.OAUTH_PROVIDER.lookupClient(clientId),
     csrfToken, // Pass to form as hidden field
     setCookie // Set the cookie
@@ -102,9 +102,9 @@ Include the token as a hidden field in your consent form:
 <input type="hidden" name="csrf_token" value="${csrfToken}" />
 ```
 
-### XSS protection
+### Input sanitization
 
-User-controlled content (client names, logos, URIs) in your approval dialog can execute malicious scripts if not sanitized. Client registration is dynamic, so you must treat all client metadata as untrusted input.
+User-controlled content (client names, logos, URIs) in your consent dialog can execute malicious scripts if not sanitized. Client registration is dynamic, so you must treat all client metadata as untrusted input.
 
 **Required protections:**
 
@@ -141,27 +141,74 @@ const clientName = sanitizeText(client.clientName);
 const logoUrl = sanitizeText(sanitizeUrl(client.logoUri));
 ```
 
-### Clickjacking protection
+### Content Security Policy (CSP)
 
-Attackers can embed your approval dialog in an invisible iframe and trick users into clicking. Prevent this with Content Security Policy headers.
+CSP headers instruct browsers to block dangerous content and behaviors. They provide defence in depth from multiple attack vectors.
 
 ```typescript
-return new Response(htmlContent, {
-  headers: {
-    "Content-Security-Policy": "frame-ancestors 'none'",
-    "X-Frame-Options": "DENY", // Legacy browser support
+function buildSecurityHeaders(setCookie: string, nonce?: string): HeadersInit {
+  const cspDirectives = [
+    "default-src 'none'", // Deny everything by default
+    "script-src 'self'" + (nonce ? ` 'nonce-${nonce}'` : ""), // Allow scripts from same origin (+ nonce if using inline JS)
+    "style-src 'self' 'unsafe-inline'", // Allow inline styles for rendering
+    "img-src 'self' https:", // Allow client logos from HTTPS URLs
+    "font-src 'self'", // Allow web fonts from same origin
+    "form-action 'self'", // Only allow form submissions to same origin
+    "frame-ancestors 'none'", // Prevent clickjacking - block ALL iframe embedding
+    "base-uri 'self'", // Prevent base tag injection attacks
+    "connect-src 'self'" // Restrict fetch/XHR to same origin
+  ].join("; ");
+
+  return {
+    "Content-Security-Policy": cspDirectives,
+    "X-Frame-Options": "DENY", // Legacy clickjacking protection for older browsers
+    "X-Content-Type-Options": "nosniff", // Prevent MIME sniffing attacks
     "Content-Type": "text/html; charset=utf-8",
     "Set-Cookie": setCookie
-  }
+  };
+}
+```
+
+### Inline JavaScript
+
+If your consent dialog needs inline JavaScript, use data attributes and nonces to prevent XSS attacks.
+
+```typescript
+// Generate a unique nonce per request
+const nonce = crypto.randomUUID();
+
+const htmlContent = `
+  <!DOCTYPE html>
+  <html>
+    <body>
+      <p>Authorization approved! Redirecting...</p>
+      <script nonce="${nonce}" data-redirect-url="${sanitizeUrl(redirectUrl)}">
+        setTimeout(() => {
+          const script = document.querySelector('script[data-redirect-url]');
+          window.location.href = script.dataset.redirectUrl;
+        }, 2000);
+      </script>
+    </body>
+  </html>
+`;
+
+return new Response(htmlContent, {
+  headers: buildSecurityHeaders(setCookie, nonce) // Pass nonce to include in CSP
 });
 ```
 
-## Managing State in KV
+- **Data attributes** store user-controlled data (like URLs) separately from JavaScript code, ensuring they're always treated as strings, never as executable code
+- **Nonces** combined with the correct CSP headers (shown above) allow your specific inline script to execute while blocking any injected scripts
+
+Note: Frameworks such as Vite will automatically handle nonce generation and insertion for you. See their docs on [Content Security Policy](https://vite.dev/guide/features.html#content-security-policy-csp) for more information.
+
+## Handling State
 
 Between the consent dialog and the callback there is a gap where the user could do something nasty. We need to make sure it is the same user that hits authorize and then reaches back to our callback. Use a random state token stored server-side in KV with a short expiration time.
 
 ```typescript
 // Use in POST /authorize - after CSRF validation, before redirecting to upstream provider
+// Firstly create a state token in KV
 async function createOAuthState(
   oauthReqInfo: AuthRequest,
   kv: KVNamespace
@@ -173,27 +220,89 @@ async function createOAuthState(
   return { stateToken };
 }
 
-// Use in GET /callback - validate state from query params before exchanging code
+// Bind state to browser session
+async function bindStateToSession(
+  stateToken: string
+): Promise<{ setCookie: string }> {
+  const consentedStateCookieName = "__Host-CONSENTED_STATE";
+
+  // Hash the state token to create a derived parameter
+  const encoder = new TextEncoder();
+  const data = encoder.encode(stateToken);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hashHex = hashArray
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+
+  const setCookie = `${consentedStateCookieName}=${hashHex}; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=600`;
+  return { setCookie };
+}
+
+// In the GET /callback - validate state from query params against both the KV and the session cookie before exchanging code
 async function validateOAuthState(
   request: Request,
   kv: KVNamespace
-): Promise<{ oauthReqInfo: AuthRequest }> {
-  const stateFromQuery = new URL(request.url).searchParams.get("state");
+): Promise<{ oauthReqInfo: AuthRequest; clearCookie: string }> {
+  const consentedStateCookieName = "__Host-CONSENTED_STATE";
+  const url = new URL(request.url);
+  const stateFromQuery = url.searchParams.get("state");
+
   if (!stateFromQuery) {
     throw new OAuthError("invalid_request", "Missing state parameter", 400);
   }
 
+  // Check 1: Validate state exists in KV
   const storedDataJson = await kv.get(`oauth:state:${stateFromQuery}`);
   if (!storedDataJson) {
     throw new OAuthError("invalid_request", "Invalid or expired state", 400);
   }
 
-  await kv.delete(`oauth:state:${stateFromQuery}`); // One-time use
-  return { oauthReqInfo: JSON.parse(storedDataJson) };
+  // Check 2: Validate state matches session cookie
+  const cookieHeader = request.headers.get("Cookie") || "";
+  const cookies = cookieHeader.split(";").map((c) => c.trim());
+  const consentedStateCookie = cookies.find((c) =>
+    c.startsWith(`${consentedStateCookieName}=`)
+  );
+  const consentedStateHash = consentedStateCookie
+    ? consentedStateCookie.substring(consentedStateCookieName.length + 1)
+    : null;
+
+  if (!consentedStateHash) {
+    throw new OAuthError(
+      "invalid_request",
+      "Missing session binding cookie - authorization flow must be restarted",
+      400
+    );
+  }
+
+  // Hash the state from query and compare with cookie
+  const encoder = new TextEncoder();
+  const data = encoder.encode(stateFromQuery);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const stateHash = hashArray
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+
+  if (stateHash !== consentedStateHash) {
+    throw new OAuthError(
+      "invalid_request",
+      "State token does not match session - possible CSRF attack detected",
+      400
+    );
+  }
+
+  // Both checks passed - clean up KV and return the clear cookie header
+  await kv.delete(`oauth:state:${stateFromQuery}`);
+  const clearCookie = `${consentedStateCookieName}=; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=0`;
+
+  return {
+    oauthReqInfo: JSON.parse(storedDataJson),
+    clearCookie
+  };
 }
 ```
-
-Alternatively, you can store a SHA-256 hash of the state in a `__Host-CONSENTED_STATE` cookie if you want to avoid KV, but since most MCP servers will be using the `OAuthProvider` class from `workers-oauth-provider` we can plug into the same `env.OAUTH_KV` binding for state management.
 
 ## Approved client
 
@@ -244,5 +353,7 @@ Instead of `__Host-CSRF_TOKEN`, use `__Host-CSRF_TOKEN_GITHUB` and `__Host-CSRF_
 
 # More info
 
-[MCP Security Best Practices](https://modelcontextprotocol.io/specification/draft/basic/security_best_practices)
-[RFC 9700 - Protecting Redirect Based Flows](https://www.rfc-editor.org/rfc/rfc9700#name-protecting-redirect-based-f)
+- [MCP Authorization](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization)
+- [MCP Security Best Practices](https://modelcontextprotocol.io/specification/draft/basic/security_best_practices)
+- [RFC 9700 - Protecting Redirect Based Flows](https://www.rfc-editor.org/rfc/rfc9700#name-protecting-redirect-based-f)
+- [RFC 9700 - Best Practices](https://www.rfc-editor.org/rfc/rfc9700#name-best-practices)
