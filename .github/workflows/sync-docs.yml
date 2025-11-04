@@ -1,0 +1,138 @@
+name: Intelligent Documentation Sync with Claude Code
+
+on:
+  pull_request:
+    types: [opened, synchronize, edited]
+
+jobs:
+  sync-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Get changed files
+        id: changed-files
+        run: |
+          git fetch origin ${{ github.event.pull_request.base.ref }}
+          git diff --name-only origin/${{ github.event.pull_request.base.ref }}...HEAD > changed_files.txt
+          echo "Changed files:"
+          cat changed_files.txt
+          grep '^docs/.*\.md$' changed_files.txt > docs_changed.txt || echo "No docs changed"
+
+      - name: Get file contents and diffs
+        id: get-diffs
+        run: |
+          mkdir -p /tmp/diffs
+          touch /tmp/diffs/changes.txt
+
+          # Capture all changed files and their diffs
+          while IFS= read -r file; do
+            echo "=== $file ===" >> /tmp/diffs/changes.txt
+            git diff origin/${{ github.event.pull_request.base.ref }}...HEAD -- "$file" >> /tmp/diffs/changes.txt
+            echo -e "\n\n" >> /tmp/diffs/changes.txt
+          done < changed_files.txt
+
+          # Always run - let Claude decide if docs are needed
+          echo "skip=false" >> $GITHUB_OUTPUT
+
+      - name: Checkout cloudflare-docs repository
+        if: steps.get-diffs.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: cloudflare/cloudflare-docs
+          token: ${{ secrets.AGENTS_GITHUB_TOKEN }}
+          path: cloudflare-docs
+
+      - name: Create branch in cloudflare-docs
+        if: steps.get-diffs.outputs.skip != 'true'
+        run: |
+          cd cloudflare-docs
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b sync-docs-pr-${{ github.event.pull_request.number }}
+
+      - name: Create prompt for Claude Code
+        if: steps.get-diffs.outputs.skip != 'true'
+        run: |
+          cat > /tmp/claude_prompt.md << EOF
+          # Intelligent Documentation Sync Task
+
+          ## Context
+          - **Source Repository:** ${{ github.repository }}
+          - **Original PR:** #${{ github.event.pull_request.number }}
+          - **PR Title:** ${{ github.event.pull_request.title }}
+          - **PR Description:**
+          ${{ github.event.pull_request.body }}
+
+          ## Changed Files and Diffs
+          $(cat /tmp/diffs/changes.txt)
+
+          ## Your Task: Evaluate and Act
+
+          You have access to two repositories:
+          1. The current directory (our main repo at ${{ github.repository }})
+          2. ./cloudflare-docs (already cloned with branch sync-docs-pr-${{ github.event.pull_request.number }} checked out)
+
+          **Step 1: Evaluate if Documentation Sync is Needed**
+
+          Please review the changes in this PR and determine if they require documentation updates in cloudflare-docs:
+
+          - **DO sync if:**
+            - Documentation files in docs/ were directly changed
+            - New public API features or functions were added
+            - Breaking changes that affect user-facing behavior
+            - New configuration options or environment variables
+            - New examples or usage patterns that should be documented
+            - Bug fixes that clarify documented behavior
+
+          - **DO NOT sync if:**
+            - Only internal code refactoring with no behavior changes
+            - Test-only changes
+            - CI/workflow changes
+            - Minor typo fixes in code comments
+            - Internal dependency updates with no API changes
+
+          **Step 2: If Documentation Sync is Needed**
+
+          If you determine documentation updates are required, please:
+          1. Navigate to the ./cloudflare-docs directory
+          2. Adapt the relevant changes for the cloudflare-docs repository structure and style
+          3. Create or update the appropriate markdown files
+          4. Ensure content follows cloudflare-docs conventions and formatting
+          5. Commit with message: "Sync docs from PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}"
+          6. Push the branch to origin
+          7. Create a PR in cloudflare-docs using gh CLI:
+             - Title: "📚 Sync docs from ${{ github.repository }}#${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}"
+             - Body should include:
+               * Explanation this is AI-adapted documentation sync
+               * Link to original PR: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+               * Summary of what documentation changes were made
+               * Note that it should be reviewed alongside the source PR
+
+          **Step 3: Provide Clear Output**
+
+          Clearly state your decision:
+          - If syncing: Explain what documentation changes you're making and why
+          - If not syncing: Explain why documentation updates aren't needed for this PR
+
+          ## Important Notes
+          - Use the GH_TOKEN environment variable for authentication with gh CLI
+          - Adapt paths, links, and references as needed for cloudflare-docs structure
+          - Follow existing patterns in the cloudflare-docs repository
+          - Be conservative but thorough - when in doubt, create the sync PR for human review
+
+          Begin your evaluation now.
+          EOF
+
+      - name: Run Claude Code to create adapted PR
+        if: steps.get-diffs.outputs.skip != 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt_file: /tmp/claude_prompt.md
+        env:
+          GH_TOKEN: ${{ secrets.AGENTS_GITHUB_TOKEN }}
