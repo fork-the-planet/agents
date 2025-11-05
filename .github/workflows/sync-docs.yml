@@ -1,4 +1,4 @@
-name: Intelligent Documentation Sync with Claude Code
+name: Documentation Sync with Claude Code
 
 on:
   pull_request:
@@ -7,6 +7,10 @@ on:
 jobs:
   sync-docs:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
     steps:
       - name: Checkout source repository
         uses: actions/checkout@v4
@@ -57,6 +61,7 @@ jobs:
 
       - name: Create prompt for Claude Code
         if: steps.get-diffs.outputs.skip != 'true'
+        id: create-prompt
         run: |
           cat > /tmp/claude_prompt.md << EOF
           # Intelligent Documentation Sync Task
@@ -98,20 +103,68 @@ jobs:
 
           **Step 2: If Documentation Sync is Needed**
 
-          If you determine documentation updates are required, please:
-          1. Navigate to the ./cloudflare-docs directory
-          2. Adapt the relevant changes for the cloudflare-docs repository structure and style
+          If you determine documentation updates are required, YOU MUST COMPLETE ALL STEPS:
+
+          1. Navigate to ./cloudflare-docs (already cloned, branch sync-docs-pr-${{ github.event.pull_request.number }} checked out)
+          2. Adapt changes for cloudflare-docs repository structure and style
           3. Create or update the appropriate markdown files
-          4. Ensure content follows cloudflare-docs conventions and formatting
-          5. Commit with message: "Sync docs from PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}"
-          6. Push the branch to origin
-          7. Create a PR in cloudflare-docs using gh CLI:
-             - Title: "📚 Sync docs from ${{ github.repository }}#${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}"
-             - Body should include:
-               * Explanation this is AI-adapted documentation sync
-               * Link to original PR: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}
-               * Summary of what documentation changes were made
-               * Note that it should be reviewed alongside the source PR
+          4. Ensure content follows cloudflare-docs conventions
+
+          5. **CRITICAL - Commit changes:**
+             Run: `cd cloudflare-docs && git add . && git commit -m "Sync docs from PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}"`
+
+          6. **CRITICAL - Push to remote:**
+             Run: `cd cloudflare-docs && git push origin sync-docs-pr-${{ github.event.pull_request.number }}`
+
+          7. **CRITICAL - Create PR in cloudflare-docs:**
+             Run: `gh pr create --repo cloudflare/cloudflare-docs --base main --head sync-docs-pr-${{ github.event.pull_request.number }} --title "📚 Sync docs from ${{ github.repository }}#${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}" --body "🤖 Automated sync from https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}"`
+
+          8. **CRITICAL - Comment on original PR (or edit existing comment):**
+             Get the docs PR URL, then create or update comment:
+             ```bash
+             DOCS_PR_URL=$(gh pr list --repo cloudflare/cloudflare-docs --head sync-docs-pr-${{ github.event.pull_request.number }} --json url --jq '.[0].url')
+             
+             # Check if bot comment already exists (look for comments from github-actions bot containing "Documentation sync")
+             EXISTING_COMMENT_ID=$(gh pr view ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --json comments --jq '.comments[] | select(.author.login == "github-actions" and (.body | contains("Documentation sync"))) | .id' | head -1)
+             
+             COMMENT_BODY="📚 **Documentation sync PR:** $DOCS_PR_URL\n\n_This comment will be updated as the PR changes._"
+             
+             if [ -n "$EXISTING_COMMENT_ID" ]; then
+               # Edit existing comment
+               gh api --method PATCH /repos/${{ github.repository }}/issues/comments/$EXISTING_COMMENT_ID -f body="$COMMENT_BODY"
+             else
+               # Create new comment
+               gh pr comment ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --body "$COMMENT_BODY"
+             fi
+             ```
+
+          ⚠️ THE TASK IS NOT COMPLETE UNTIL ALL 8 STEPS ARE DONE. Do not stop after editing files.
+
+          ## Documentation Writing Guidelines (Diátaxis Framework)
+
+          When writing the documentation content, adapt your approach based on what changed:
+
+          **For a single function/method:**
+          - **Reference**: Technical description - signature, parameters, return types, behavior
+          - **Example**: Concise code snippet showing usage in context
+          - **Use cases**: Brief bullets on when/why to use it (if not obvious)
+          - **DO NOT** create separate "how-to" sections - integrate examples into the reference
+
+          **For new features/workflows (multiple related functions):**
+          - **Reference**: Complete API docs for all functions
+          - **How-to guide**: Step-by-step guide for real-world tasks
+          - **Explanation**: Architecture, design decisions, alternatives
+
+          **For breaking changes:**
+          - **Reference**: Updated API documentation
+          - **How-to**: Migration guide (before/after)
+          - **Explanation**: Why changed, implications
+
+          **Key principles:**
+          - Single functions = reference + example (concise)
+          - Multi-step workflows = separate how-to guides
+          - Keep reference neutral and factual
+          - Don't overexplain simple functions
 
           **Step 3: Provide Clear Output**
 
@@ -128,11 +181,17 @@ jobs:
           Begin your evaluation now.
           EOF
 
+          echo "prompt<<PROMPT_EOF" >> $GITHUB_OUTPUT
+          cat /tmp/claude_prompt.md >> $GITHUB_OUTPUT
+          echo "PROMPT_EOF" >> $GITHUB_OUTPUT
+
       - name: Run Claude Code to create adapted PR
         if: steps.get-diffs.outputs.skip != 'true'
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          prompt_file: /tmp/claude_prompt.md
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: ${{ steps.create-prompt.outputs.prompt }}
+          claude_args: "--allowed-tools Bash,Edit"
         env:
           GH_TOKEN: ${{ secrets.AGENTS_GITHUB_TOKEN }}
