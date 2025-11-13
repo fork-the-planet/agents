@@ -452,13 +452,13 @@ export type {
 export {
   createMcpHandler,
   experimental_createMcpHandler,
-  type CreateMcpHandlerOptions,
-  type OAuthExecutionContext
+  type CreateMcpHandlerOptions
 } from "./handler";
 
 export { getMcpAuthContext, type McpAuthContext } from "./auth-context";
 
 export {
   WorkerTransport,
-  type WorkerTransportOptions
+  type WorkerTransportOptions,
+  type TransportState
 } from "./worker-transport";

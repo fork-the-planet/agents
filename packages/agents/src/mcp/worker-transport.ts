@@ -19,9 +19,8 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { CORSOptions } from "./types";
 
-// MCP Protocol Version constants
 const SUPPORTED_PROTOCOL_VERSIONS = ["2025-03-26", "2025-06-18"] as const;
-const DEFAULT_PROTOCOL_VERSION = "2025-03-26"; // For backwards compatibility
+const DEFAULT_PROTOCOL_VERSION = "2025-03-26";
 const MCP_PROTOCOL_VERSION_HEADER = "MCP-Protocol-Version";
 
 type ProtocolVersion = (typeof SUPPORTED_PROTOCOL_VERSIONS)[number];
@@ -33,15 +32,35 @@ interface StreamMapping {
   cleanup: () => void;
 }
 
+export interface MCPStorageApi {
+  get(): Promise<TransportState | undefined> | TransportState | undefined;
+  set(state: TransportState): Promise<void> | void;
+}
+
+export interface TransportState {
+  sessionId?: string;
+  initialized: boolean;
+  protocolVersion?: ProtocolVersion;
+}
+
 export interface WorkerTransportOptions {
   sessionIdGenerator?: () => string;
+  /**
+   * Enable traditional Request/Response mode, this will disable streaming.
+   */
   enableJsonResponse?: boolean;
   onsessioninitialized?: (sessionId: string) => void;
   corsOptions?: CORSOptions;
+  /**
+   * Optional storage api for persisting transport state.
+   * Use this to store session state in Durable Object/Agent storage
+   * so it survives hibernation/restart.
+   */
+  storage?: MCPStorageApi;
 }
 
 export class WorkerTransport implements Transport {
-  private started = false;
+  started = false;
   private initialized = false;
   private sessionIdGenerator?: () => string;
   private enableJsonResponse = false;
@@ -52,6 +71,8 @@ export class WorkerTransport implements Transport {
   private requestResponseMap = new Map<RequestId, JSONRPCMessage>();
   private corsOptions?: CORSOptions;
   private protocolVersion?: ProtocolVersion;
+  private storage?: MCPStorageApi;
+  private stateRestored = false;
 
   sessionId?: string;
   onclose?: () => void;
@@ -63,6 +84,44 @@ export class WorkerTransport implements Transport {
     this.enableJsonResponse = options?.enableJsonResponse ?? false;
     this.onsessioninitialized = options?.onsessioninitialized;
     this.corsOptions = options?.corsOptions;
+    this.storage = options?.storage;
+  }
+
+  /**
+   * Restore transport state from persistent storage.
+   * This is automatically called on start.
+   */
+  private async restoreState() {
+    if (!this.storage || this.stateRestored) {
+      return;
+    }
+
+    const state = await Promise.resolve(this.storage.get());
+
+    if (state) {
+      this.sessionId = state.sessionId;
+      this.initialized = state.initialized;
+      this.protocolVersion = state.protocolVersion;
+    }
+
+    this.stateRestored = true;
+  }
+
+  /**
+   * Persist current transport state to storage.
+   */
+  private async saveState() {
+    if (!this.storage) {
+      return;
+    }
+
+    const state: TransportState = {
+      sessionId: this.sessionId,
+      initialized: this.initialized,
+      protocolVersion: this.protocolVersion
+    };
+
+    await Promise.resolve(this.storage.set(state));
   }
 
   async start(): Promise<void> {
@@ -184,6 +243,8 @@ export class WorkerTransport implements Transport {
     request: Request,
     parsedBody?: unknown
   ): Promise<Response> {
+    await this.restoreState();
+
     switch (request.method) {
       case "OPTIONS":
         return this.handleOptionsRequest(request);
@@ -459,6 +520,7 @@ export class WorkerTransport implements Transport {
 
       this.sessionId = this.sessionIdGenerator?.();
       this.initialized = true;
+      await this.saveState();
 
       if (this.sessionId && this.onsessioninitialized) {
         this.onsessioninitialized(this.sessionId);

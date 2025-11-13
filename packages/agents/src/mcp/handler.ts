@@ -5,7 +5,6 @@ import {
   type WorkerTransportOptions
 } from "./worker-transport";
 import { runWithAuthContext, type McpAuthContext } from "./auth-context";
-import type { CORSOptions } from "./types";
 
 export interface CreateMcpHandlerOptions extends WorkerTransportOptions {
   /**
@@ -15,25 +14,16 @@ export interface CreateMcpHandlerOptions extends WorkerTransportOptions {
    */
   route?: string;
   /**
-   * CORS configuration options for handling cross-origin requests.
-   * These options are passed to the WorkerTransport which handles adding
-   * CORS headers to all responses.
-   *
-   * Default values are:
-   * - origin: "*"
-   * - headers: "Content-Type, Accept, Authorization, mcp-session-id, MCP-Protocol-Version"
-   * - methods: "GET, POST, DELETE, OPTIONS"
-   * - exposeHeaders: "mcp-session-id"
-   * - maxAge: 86400
-   *
-   * Provided options will overwrite the defaults.
+   * An optional auth context to use for handling MCP requests.
+   * If not provided, the handler will look for props in the execution context.
    */
-  corsOptions?: CORSOptions;
+  authContext?: McpAuthContext;
+  /**
+   * An optional transport to use for handling MCP requests.
+   * If not provided, a WorkerTransport will be created with the provided WorkerTransportOptions.
+   */
+  transport?: WorkerTransport;
 }
-
-export type OAuthExecutionContext = ExecutionContext & {
-  props?: Record<string, unknown>;
-};
 
 export function createMcpHandler(
   server: McpServer | Server,
@@ -50,23 +40,44 @@ export function createMcpHandler(
     _env: unknown,
     ctx: ExecutionContext
   ): Promise<Response> => {
-    // Check if the request path matches the configured route
     const url = new URL(request.url);
     if (route && url.pathname !== route) {
       return new Response("Not Found", { status: 404 });
     }
 
-    const oauthCtx = ctx as OAuthExecutionContext;
-    const authContext: McpAuthContext | undefined = oauthCtx.props
-      ? { props: oauthCtx.props }
-      : undefined;
+    const transport =
+      options.transport ??
+      new WorkerTransport({
+        sessionIdGenerator: options.sessionIdGenerator,
+        enableJsonResponse: options.enableJsonResponse,
+        onsessioninitialized: options.onsessioninitialized,
+        corsOptions: options.corsOptions,
+        storage: options.storage
+      });
 
-    const transport = new WorkerTransport(options);
-    await server.connect(transport);
+    const buildAuthContext = () => {
+      if (options.authContext) {
+        return options.authContext;
+      }
+
+      if (ctx.props && Object.keys(ctx.props).length > 0) {
+        return {
+          props: ctx.props as Record<string, unknown>
+        };
+      }
+
+      return undefined;
+    };
 
     const handleRequest = async () => {
       return await transport.handleRequest(request);
     };
+
+    const authContext = buildAuthContext();
+
+    if (!transport.started) {
+      await server.connect(transport);
+    }
 
     try {
       if (authContext) {
