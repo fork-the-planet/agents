@@ -257,11 +257,21 @@ export class TestOAuthAgent extends Agent<Env> {
 
   async setupMockMcpConnection(
     serverId: string,
-    _serverName: string,
+    serverName: string,
     serverUrl: string,
-    callbackUrl: string
+    callbackUrl: string,
+    clientId?: string | null
   ): Promise<void> {
-    this.mcp.registerCallbackUrl(`${callbackUrl}/${serverId}`);
+    // Save server to database with callback URL
+    await (this.mcp as any)._storage.saveServer({
+      id: serverId,
+      name: serverName,
+      server_url: serverUrl,
+      callback_url: `${callbackUrl}/${serverId}`,
+      client_id: clientId ?? null,
+      auth_url: null,
+      server_options: null
+    });
     this.mcp.mcpConnections[serverId] = this.createMockMcpConnection(
       serverId,
       serverUrl,
@@ -317,8 +327,8 @@ export class TestOAuthAgent extends Agent<Env> {
     return servers.length > 0 ? servers[0] : null;
   }
 
-  isCallbackUrlRegistered(callbackUrl: string): boolean {
-    return this.mcp.isCallbackRequest(new Request(callbackUrl));
+  async isCallbackUrlRegistered(callbackUrl: string): Promise<boolean> {
+    return await this.mcp.isCallbackRequest(new Request(callbackUrl));
   }
 
   removeMcpConnection(serverId: string): void {
@@ -331,7 +341,7 @@ export class TestOAuthAgent extends Agent<Env> {
 
   resetMcpStateRestoredFlag(): void {
     // @ts-expect-error - accessing private property for testing
-    this._mcpStateRestored = false;
+    this._mcpConnectionsInitialized = false;
   }
 }
 
