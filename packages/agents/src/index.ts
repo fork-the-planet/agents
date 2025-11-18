@@ -321,6 +321,7 @@ export class Agent<
   private _state = DEFAULT_STATE as State;
   private _disposables = new DisposableStore();
   private _mcpStateRestored = false;
+  private _destroyed = false;
 
   private _ParentClass: typeof Agent<Env, State> =
     Object.getPrototypeOf(this).constructor;
@@ -457,26 +458,18 @@ export class Agent<
       )
     `;
 
-    void this.ctx.blockConcurrencyWhile(async () => {
-      return this._tryCatch(async () => {
-        // Create alarms table if it doesn't exist
-        this.sql`
-        CREATE TABLE IF NOT EXISTS cf_agents_schedules (
-          id TEXT PRIMARY KEY NOT NULL DEFAULT (randomblob(9)),
-          callback TEXT,
-          payload TEXT,
-          type TEXT NOT NULL CHECK(type IN ('scheduled', 'delayed', 'cron')),
-          time INTEGER,
-          delayInSeconds INTEGER,
-          cron TEXT,
-          created_at INTEGER DEFAULT (unixepoch())
-        )
-      `;
-
-        // execute any pending alarms and schedule the next alarm
-        await this.alarm();
-      });
-    });
+    this.sql`
+      CREATE TABLE IF NOT EXISTS cf_agents_schedules (
+        id TEXT PRIMARY KEY NOT NULL DEFAULT (randomblob(9)),
+        callback TEXT,
+        payload TEXT,
+        type TEXT NOT NULL CHECK(type IN ('scheduled', 'delayed', 'cron')),
+        time INTEGER,
+        delayInSeconds INTEGER,
+        cron TEXT,
+        created_at INTEGER DEFAULT (unixepoch())
+      )
+    `;
 
     this.sql`
       CREATE TABLE IF NOT EXISTS cf_agents_mcp_servers (
@@ -1251,7 +1244,7 @@ export class Agent<
     // Find the next schedule that needs to be executed
     const result = this.sql`
       SELECT time FROM cf_agents_schedules
-      WHERE time > ${Math.floor(Date.now() / 1000)}
+      WHERE time >= ${Math.floor(Date.now() / 1000)}
       ORDER BY time ASC
       LIMIT 1
     `;
@@ -1321,6 +1314,7 @@ export class Agent<
           }
         );
         if (row.type === "cron") {
+          if (this._destroyed) return;
           // Update next execution time for cron schedules
           const nextExecutionTime = getNextCronTime(row.cron);
           const nextTimestamp = Math.floor(nextExecutionTime.getTime() / 1000);
@@ -1329,6 +1323,7 @@ export class Agent<
           UPDATE cf_agents_schedules SET time = ${nextTimestamp} WHERE id = ${row.id}
         `;
         } else {
+          if (this._destroyed) return;
           // Delete one-time schedules after execution
           this.sql`
           DELETE FROM cf_agents_schedules WHERE id = ${row.id}
@@ -1336,6 +1331,7 @@ export class Agent<
         }
       }
     }
+    if (this._destroyed) return;
 
     // Schedule the next alarm
     await this._scheduleNextAlarm();
@@ -1356,7 +1352,13 @@ export class Agent<
     await this.ctx.storage.deleteAll();
     this._disposables.dispose();
     await this.mcp.dispose?.();
-    this.ctx.abort("destroyed"); // enforce that the agent is evicted
+    this._destroyed = true;
+
+    // `ctx.abort` throws an uncatchable error, so we yield to the event loop
+    // to avoid capturing it and let handlers finish cleaning up
+    setTimeout(() => {
+      this.ctx.abort("destroyed");
+    }, 0);
 
     this.observability?.emit(
       {
