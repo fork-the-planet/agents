@@ -43,41 +43,30 @@ import type { BaseTransportType, TransportType } from "./types";
  * Connection state machine for MCP client connections.
  *
  * State transitions:
- * - Non-OAuth: init() → "connecting" → "discovering" → "ready"
- * - OAuth: init() → "authenticating" → (callback) → "connecting" → "discovering" → "ready"
- * - Any state can transition to "failed" on error
+ * - Non-OAuth: init() → CONNECTING → DISCOVERING → READY
+ * - OAuth: init() → AUTHENTICATING → (callback) → CONNECTING → DISCOVERING → READY
+ * - Any state can transition to FAILED on error
+ */
+export const MCPConnectionState = {
+  /** Waiting for OAuth authorization to complete */
+  AUTHENTICATING: "authenticating",
+  /** Establishing transport connection to MCP server */
+  CONNECTING: "connecting",
+  /** Transport connection established */
+  CONNECTED: "connected",
+  /** Discovering server capabilities (tools, resources, prompts) */
+  DISCOVERING: "discovering",
+  /** Fully connected and ready to use */
+  READY: "ready",
+  /** Connection failed at some point */
+  FAILED: "failed"
+} as const;
+
+/**
+ * Connection state type for MCP client connections.
  */
 export type MCPConnectionState =
-  /**
-   * Waiting for OAuth authorization to complete.
-   * Server requires OAuth and user must complete the authorization flow.
-   * Next state: "connecting" (after handleCallbackRequest + establishConnection)
-   */
-  | "authenticating"
-  /**
-   * Establishing transport connection to MCP server.
-   * OAuth (if required) is complete, now connecting to the actual MCP endpoint.
-   * Next state: "discovering" (after transport connected)
-   */
-  | "connecting"
-  /**
-   * Fully connected and ready to use.
-   * Tools, resources, and prompts have been discovered and registered.
-   * This is the terminal success state.
-   */
-  | "ready"
-  /**
-   * Discovering server capabilities (tools, resources, prompts).
-   * Transport is connected, now fetching available capabilities via MCP protocol.
-   * Next state: "ready" (after capabilities fetched)
-   */
-  | "discovering"
-  /**
-   * Connection failed at some point.
-   * Check observability events for error details.
-   * This is a terminal error state.
-   */
-  | "failed";
+  (typeof MCPConnectionState)[keyof typeof MCPConnectionState];
 
 export type MCPTransportOptions = (
   | SSEClientTransportOptions
@@ -87,9 +76,25 @@ export type MCPTransportOptions = (
   type?: TransportType;
 };
 
+export type MCPClientConnectionResult = {
+  state: MCPConnectionState;
+  error?: Error;
+  transport?: BaseTransportType;
+};
+
+/**
+ * Result of a discovery operation.
+ * success indicates whether discovery completed successfully.
+ * error is present when success is false.
+ */
+export type MCPDiscoveryResult = {
+  success: boolean;
+  error?: string;
+};
+
 export class MCPClientConnection {
   client: Client;
-  connectionState: MCPConnectionState = "connecting";
+  connectionState: MCPConnectionState = MCPConnectionState.CONNECTING;
   lastConnectedTransport: BaseTransportType | undefined;
   instructions?: string;
   tools: Tool[] = [];
@@ -97,6 +102,9 @@ export class MCPClientConnection {
   resources: Resource[] = [];
   resourceTemplates: ResourceTemplate[] = [];
   serverCapabilities: ServerCapabilities | undefined;
+
+  /** Tracks in-flight discovery to allow cancellation */
+  private _discoveryAbortController: AbortController | undefined;
 
   private readonly _onObservabilityEvent = new Emitter<MCPObservabilityEvent>();
   public readonly onObservabilityEvent: Event<MCPObservabilityEvent> =
@@ -122,43 +130,63 @@ export class MCPClientConnection {
   }
 
   /**
-   * Initialize a client connection
+   * Initialize a client connection, if authentication is required, the connection will be in the AUTHENTICATING state
+   * Sets connection state based on the result and emits observability events
    *
-   * @returns
+   * @returns Error message if connection failed, undefined otherwise
    */
-  async init() {
+  async init(): Promise<string | undefined> {
     const transportType = this.options.transport.type;
     if (!transportType) {
       throw new Error("Transport type must be specified");
     }
 
-    try {
-      await this.tryConnect(transportType);
-    } catch (e) {
-      if (isUnauthorized(e)) {
-        // unauthorized, we should wait for the user to authenticate
-        this.connectionState = "authenticating";
-        return;
-      }
-      // For explicit transport mismatches or other errors, mark as failed
-      // and do not throw to avoid bubbling errors to the client runtime.
+    const res = await this.tryConnect(transportType);
+
+    // Set the connection state
+    this.connectionState = res.state;
+
+    // Handle the result and emit appropriate events
+    if (res.state === MCPConnectionState.CONNECTED && res.transport) {
+      // Set up elicitation request handler after successful connection
+      this.client.setRequestHandler(
+        ElicitRequestSchema,
+        async (request: ElicitRequest) => {
+          return await this.handleElicitationRequest(request);
+        }
+      );
+
+      this.lastConnectedTransport = res.transport;
+
       this._onObservabilityEvent.fire({
         type: "mcp:client:connect",
-        displayMessage: `Connection initialization failed for ${this.url.toString()}`,
+        displayMessage: `Connected successfully using ${res.transport} transport for ${this.url.toString()}`,
         payload: {
           url: this.url.toString(),
-          transport: transportType,
-          state: this.connectionState,
-          error: toErrorMessage(e)
+          transport: res.transport,
+          state: this.connectionState
         },
         timestamp: Date.now(),
         id: nanoid()
       });
-      this.connectionState = "failed";
-      return;
+      return undefined;
+    } else if (res.state === MCPConnectionState.FAILED && res.error) {
+      const errorMessage = toErrorMessage(res.error);
+      this._onObservabilityEvent.fire({
+        type: "mcp:client:connect",
+        displayMessage: `Failed to connect to ${this.url.toString()}: ${errorMessage}`,
+        payload: {
+          url: this.url.toString(),
+          transport: transportType,
+          state: this.connectionState,
+          error: errorMessage
+        },
+        timestamp: Date.now(),
+        id: nanoid()
+      });
+      return errorMessage;
     }
-
-    await this.discoverAndRegister();
+    return undefined;
   }
 
   /**
@@ -202,7 +230,7 @@ export class MCPClientConnection {
    * Complete OAuth authorization
    */
   async completeAuthorization(code: string): Promise<void> {
-    if (this.connectionState !== "authenticating") {
+    if (this.connectionState !== MCPConnectionState.AUTHENTICATING) {
       throw new Error(
         "Connection must be in authenticating state to complete authorization"
       );
@@ -213,113 +241,227 @@ export class MCPClientConnection {
       await this.finishAuthProbe(code);
 
       // Mark as connecting
-      this.connectionState = "connecting";
+      this.connectionState = MCPConnectionState.CONNECTING;
     } catch (error) {
-      this.connectionState = "failed";
+      this.connectionState = MCPConnectionState.FAILED;
       throw error;
     }
   }
 
   /**
-   * Establish connection after successful authorization
+   * Discover server capabilities and register tools, resources, prompts, and templates.
+   * This method does the work but does not manage connection state - that's handled by discover().
    */
-  async establishConnection(): Promise<void> {
-    if (this.connectionState !== "connecting") {
-      throw new Error(
-        "Connection must be in connecting state to establish connection"
-      );
-    }
-
-    try {
-      const transportType = this.options.transport.type;
-      if (!transportType) {
-        throw new Error("Transport type must be specified");
-      }
-      await this.tryConnect(transportType);
-
-      await this.discoverAndRegister();
-    } catch (error) {
-      this.connectionState = "failed";
-      throw error;
-    }
-  }
-
-  /**
-   * Discover server capabilities and register tools, resources, prompts, and templates
-   */
-  private async discoverAndRegister(): Promise<void> {
-    this.connectionState = "discovering";
-
+  async discoverAndRegister(): Promise<void> {
     this.serverCapabilities = this.client.getServerCapabilities();
     if (!this.serverCapabilities) {
       throw new Error("The MCP Server failed to return server capabilities");
     }
 
-    const [
-      instructionsResult,
-      toolsResult,
-      resourcesResult,
-      promptsResult,
-      resourceTemplatesResult
-    ] = await Promise.allSettled([
-      this.client.getInstructions(),
-      this.registerTools(),
-      this.registerResources(),
-      this.registerPrompts(),
-      this.registerResourceTemplates()
-    ]);
+    // Build list of operations to perform based on server capabilities
+    type DiscoveryResult =
+      | string
+      | undefined
+      | Tool[]
+      | Resource[]
+      | Prompt[]
+      | ResourceTemplate[];
+    const operations: Promise<DiscoveryResult>[] = [];
+    const operationNames: string[] = [];
 
-    const operations = [
-      { name: "instructions", result: instructionsResult },
-      { name: "tools", result: toolsResult },
-      { name: "resources", result: resourcesResult },
-      { name: "prompts", result: promptsResult },
-      { name: "resource templates", result: resourceTemplatesResult }
-    ];
+    // Instructions (always try to fetch if available)
+    operations.push(Promise.resolve(this.client.getInstructions()));
+    operationNames.push("instructions");
 
-    for (const { name, result } of operations) {
-      if (result.status === "rejected") {
-        const url = this.url.toString();
-        this._onObservabilityEvent.fire({
-          type: "mcp:client:discover",
-          displayMessage: `Failed to discover ${name} for ${url}`,
-          payload: {
-            url,
-            capability: name,
-            error: result.reason
-          },
-          timestamp: Date.now(),
-          id: nanoid()
-        });
-      }
+    // Only register capabilities that the server advertises
+    if (this.serverCapabilities.tools) {
+      operations.push(this.registerTools());
+      operationNames.push("tools");
     }
 
-    this.instructions =
-      instructionsResult.status === "fulfilled"
-        ? instructionsResult.value
-        : undefined;
-    this.tools = toolsResult.status === "fulfilled" ? toolsResult.value : [];
-    this.resources =
-      resourcesResult.status === "fulfilled" ? resourcesResult.value : [];
-    this.prompts =
-      promptsResult.status === "fulfilled" ? promptsResult.value : [];
-    this.resourceTemplates =
-      resourceTemplatesResult.status === "fulfilled"
-        ? resourceTemplatesResult.value
-        : [];
+    if (this.serverCapabilities.resources) {
+      operations.push(this.registerResources());
+      operationNames.push("resources");
+    }
 
-    this.connectionState = "ready";
+    if (this.serverCapabilities.prompts) {
+      operations.push(this.registerPrompts());
+      operationNames.push("prompts");
+    }
+
+    if (this.serverCapabilities.resources) {
+      operations.push(this.registerResourceTemplates());
+      operationNames.push("resource templates");
+    }
+
+    try {
+      const results = await Promise.all(operations);
+      for (let i = 0; i < results.length; i++) {
+        const result = results[i];
+        const name = operationNames[i];
+
+        switch (name) {
+          case "instructions":
+            this.instructions = result as string | undefined;
+            break;
+          case "tools":
+            this.tools = result as Tool[];
+            break;
+          case "resources":
+            this.resources = result as Resource[];
+            break;
+          case "prompts":
+            this.prompts = result as Prompt[];
+            break;
+          case "resource templates":
+            this.resourceTemplates = result as ResourceTemplate[];
+            break;
+        }
+      }
+    } catch (error) {
+      this._onObservabilityEvent.fire({
+        type: "mcp:client:discover",
+        displayMessage: `Failed to discover capabilities for ${this.url.toString()}: ${toErrorMessage(error)}`,
+        payload: {
+          url: this.url.toString(),
+          error: toErrorMessage(error)
+        },
+        timestamp: Date.now(),
+        id: nanoid()
+      });
+
+      throw error;
+    }
   }
 
   /**
-   * Notification handler registration
+   * Discover server capabilities with timeout and cancellation support.
+   * If called while a previous discovery is in-flight, the previous discovery will be aborted.
+   *
+   * @param options Optional configuration
+   * @param options.timeoutMs Timeout in milliseconds (default: 15000)
+   * @returns Result indicating success/failure with optional error message
    */
-  async registerTools(): Promise<Tool[]> {
-    if (!this.serverCapabilities || !this.serverCapabilities.tools) {
-      return [];
+  async discover(
+    options: { timeoutMs?: number } = {}
+  ): Promise<MCPDiscoveryResult> {
+    const { timeoutMs = 15000 } = options;
+
+    // Check if state allows discovery
+    if (
+      this.connectionState !== MCPConnectionState.CONNECTED &&
+      this.connectionState !== MCPConnectionState.READY
+    ) {
+      this._onObservabilityEvent.fire({
+        type: "mcp:client:discover",
+        displayMessage: `Discovery skipped for ${this.url.toString()}, state is ${this.connectionState}`,
+        payload: {
+          url: this.url.toString(),
+          state: this.connectionState
+        },
+        timestamp: Date.now(),
+        id: nanoid()
+      });
+      return {
+        success: false,
+        error: `Discovery skipped - connection in ${this.connectionState} state`
+      };
     }
 
-    if (this.serverCapabilities.tools.listChanged) {
+    // Cancel any previous in-flight discovery
+    if (this._discoveryAbortController) {
+      this._discoveryAbortController.abort();
+      this._discoveryAbortController = undefined;
+    }
+
+    // Create a new AbortController for this discovery
+    const abortController = new AbortController();
+    this._discoveryAbortController = abortController;
+
+    this.connectionState = MCPConnectionState.DISCOVERING;
+
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+      // Create timeout promise
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error(`Discovery timed out after ${timeoutMs}ms`)),
+          timeoutMs
+        );
+      });
+
+      // Check if aborted before starting
+      if (abortController.signal.aborted) {
+        throw new Error("Discovery was cancelled");
+      }
+
+      // Create an abort promise that rejects when signal fires
+      const abortPromise = new Promise<never>((_, reject) => {
+        abortController.signal.addEventListener("abort", () => {
+          reject(new Error("Discovery was cancelled"));
+        });
+      });
+
+      await Promise.race([
+        this.discoverAndRegister(),
+        timeoutPromise,
+        abortPromise
+      ]);
+
+      // Clear timeout on success
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+      }
+
+      // Discovery succeeded - transition to ready
+      this.connectionState = MCPConnectionState.READY;
+
+      this._onObservabilityEvent.fire({
+        type: "mcp:client:discover",
+        displayMessage: `Discovery completed for ${this.url.toString()}`,
+        payload: {
+          url: this.url.toString()
+        },
+        timestamp: Date.now(),
+        id: nanoid()
+      });
+
+      return { success: true };
+    } catch (e) {
+      // Always clear the timeout
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+      }
+
+      // Return to CONNECTED state so user can retry discovery
+      this.connectionState = MCPConnectionState.CONNECTED;
+
+      const error = e instanceof Error ? e.message : String(e);
+      return { success: false, error };
+    } finally {
+      // Clean up the abort controller
+      this._discoveryAbortController = undefined;
+    }
+  }
+
+  /**
+   * Cancel any in-flight discovery operation.
+   * Called when closing the connection.
+   */
+  cancelDiscovery(): void {
+    if (this._discoveryAbortController) {
+      this._discoveryAbortController.abort();
+      this._discoveryAbortController = undefined;
+    }
+  }
+
+  /**
+   * Notification handler registration for tools
+   * Should only be called if serverCapabilities.tools exists
+   */
+  async registerTools(): Promise<Tool[]> {
+    if (this.serverCapabilities?.tools?.listChanged) {
       this.client.setNotificationHandler(
         ToolListChangedNotificationSchema,
         async (_notification) => {
@@ -331,12 +473,12 @@ export class MCPClientConnection {
     return this.fetchTools();
   }
 
+  /**
+   * Notification handler registration for resources
+   * Should only be called if serverCapabilities.resources exists
+   */
   async registerResources(): Promise<Resource[]> {
-    if (!this.serverCapabilities || !this.serverCapabilities.resources) {
-      return [];
-    }
-
-    if (this.serverCapabilities.resources.listChanged) {
+    if (this.serverCapabilities?.resources?.listChanged) {
       this.client.setNotificationHandler(
         ResourceListChangedNotificationSchema,
         async (_notification) => {
@@ -348,12 +490,12 @@ export class MCPClientConnection {
     return this.fetchResources();
   }
 
+  /**
+   * Notification handler registration for prompts
+   * Should only be called if serverCapabilities.prompts exists
+   */
   async registerPrompts(): Promise<Prompt[]> {
-    if (!this.serverCapabilities || !this.serverCapabilities.prompts) {
-      return [];
-    }
-
-    if (this.serverCapabilities.prompts.listChanged) {
+    if (this.serverCapabilities?.prompts?.listChanged) {
       this.client.setNotificationHandler(
         PromptListChangedNotificationSchema,
         async (_notification) => {
@@ -366,10 +508,6 @@ export class MCPClientConnection {
   }
 
   async registerResourceTemplates(): Promise<ResourceTemplate[]> {
-    if (!this.serverCapabilities || !this.serverCapabilities.resources) {
-      return [];
-    }
-
     return this.fetchResourceTemplates();
   }
 
@@ -473,7 +611,9 @@ export class MCPClientConnection {
     }
   }
 
-  private async tryConnect(transportType: TransportType) {
+  private async tryConnect(
+    transportType: TransportType
+  ): Promise<MCPClientConnectionResult> {
     const transports: BaseTransportType[] =
       transportType === "auto" ? ["streamable-http", "sse"] : [transportType];
 
@@ -489,56 +629,37 @@ export class MCPClientConnection {
 
       try {
         await this.client.connect(transport);
-        this.lastConnectedTransport = currentTransportType;
-        const url = this.url.toString();
-        this._onObservabilityEvent.fire({
-          type: "mcp:client:connect",
-          displayMessage: `Connected successfully using ${currentTransportType} transport for ${url}`,
-          payload: {
-            url,
-            transport: currentTransportType,
-            state: this.connectionState
-          },
-          timestamp: Date.now(),
-          id: nanoid()
-        });
-        break;
+
+        return {
+          state: MCPConnectionState.CONNECTED,
+          transport: currentTransportType
+        };
       } catch (e) {
         const error = e instanceof Error ? e : new Error(String(e));
 
-        // If unauthorized, bubble up for proper auth handling
         if (isUnauthorized(error)) {
-          throw e;
+          return {
+            state: MCPConnectionState.AUTHENTICATING
+          };
         }
 
-        if (hasFallback && isTransportNotImplemented(error)) {
-          // Try the next transport silently
-          const url = this.url.toString();
-          this._onObservabilityEvent.fire({
-            type: "mcp:client:connect",
-            displayMessage: `${currentTransportType} transport not available, trying ${transports[transports.indexOf(currentTransportType) + 1]} for ${url}`,
-            payload: {
-              url,
-              transport: currentTransportType,
-              state: this.connectionState
-            },
-            timestamp: Date.now(),
-            id: nanoid()
-          });
+        if (isTransportNotImplemented(error) && hasFallback) {
+          // Try the next transport
           continue;
         }
 
-        throw e;
+        return {
+          state: MCPConnectionState.FAILED,
+          error
+        };
       }
     }
 
-    // Set up elicitation request handler
-    this.client.setRequestHandler(
-      ElicitRequestSchema,
-      async (request: ElicitRequest) => {
-        return await this.handleElicitationRequest(request);
-      }
-    );
+    // Should never reach here
+    return {
+      state: MCPConnectionState.FAILED,
+      error: new Error("No transports available")
+    };
   }
 
   private _capabilityErrorHandler<T>(empty: T, method: string) {

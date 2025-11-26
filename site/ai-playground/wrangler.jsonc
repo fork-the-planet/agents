@@ -27,9 +27,11 @@
       "tag": "v1"
     }
   ],
-
   "observability": {
     "logs": {
+      "enabled": true
+    },
+    "traces": {
       "enabled": true
     }
   },

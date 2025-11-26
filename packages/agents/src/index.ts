@@ -23,7 +23,7 @@ import {
 } from "partyserver";
 import { camelCaseToKebabCase } from "./client";
 import { MCPClientManager, type MCPClientOAuthResult } from "./mcp/client";
-import type { MCPConnectionState } from "./mcp/client-connection";
+import { MCPConnectionState } from "./mcp/client-connection";
 import { DurableObjectOAuthClientProvider } from "./mcp/do-oauth-client-provider";
 import type { TransportType } from "./mcp/types";
 import { genericObservability, type Observability } from "./observability";
@@ -1367,7 +1367,8 @@ export class Agent<
    * @param callbackHost Base host for the agent, used for the redirect URI. If not provided, will be derived from the current request.
    * @param agentsPrefix agents routing prefix if not using `agents`
    * @param options MCP client and transport options
-   * @returns authUrl
+   * @returns Server id and state - either "authenticating" with authUrl, or "ready"
+   * @throws If connection or discovery fails
    */
   async addMcpServer(
     serverName: string,
@@ -1381,7 +1382,18 @@ export class Agent<
         type?: TransportType;
       };
     }
-  ): Promise<{ id: string; authUrl: string | undefined }> {
+  ): Promise<
+    | {
+        id: string;
+        state: typeof MCPConnectionState.AUTHENTICATING;
+        authUrl: string;
+      }
+    | {
+        id: string;
+        state: typeof MCPConnectionState.READY;
+        authUrl?: undefined;
+      }
+  > {
     // If callbackHost is not provided, derive it from the current request
     let resolvedCallbackHost = callbackHost;
     if (!resolvedCallbackHost) {
@@ -1446,21 +1458,34 @@ export class Agent<
       }
     });
 
-    // Connect to server (updates storage with auth URL if OAuth)
-    // This fires onServerStateChanged event which triggers broadcast
     const result = await this.mcp.connectToServer(id);
 
-    return {
-      id,
-      authUrl: result.state === "authenticating" ? result.authUrl : undefined
-    };
+    if (result.state === MCPConnectionState.FAILED) {
+      // Server stays in storage so user can retry via connectToServer(id)
+      throw new Error(
+        `Failed to connect to MCP server at ${url}: ${result.error}`
+      );
+    }
+
+    if (result.state === MCPConnectionState.AUTHENTICATING) {
+      return { id, state: result.state, authUrl: result.authUrl };
+    }
+
+    // State is CONNECTED - discover capabilities
+    const discoverResult = await this.mcp.discoverIfConnected(id);
+
+    if (discoverResult && !discoverResult.success) {
+      // Server stays in storage - connection is still valid, user can retry discovery
+      throw new Error(
+        `Failed to discover MCP server capabilities: ${discoverResult.error}`
+      );
+    }
+
+    return { id, state: MCPConnectionState.READY };
   }
 
   async removeMcpServer(id: string) {
-    if (this.mcp.mcpConnections[id]) {
-      await this.mcp.closeConnection(id);
-    }
-    this.mcp.removeServer(id);
+    await this.mcp.removeServer(id);
   }
 
   getMcpServers(): MCPServersState {
@@ -1535,20 +1560,15 @@ export class Agent<
 
     // If auth was successful, establish the connection in the background
     if (result.authSuccess) {
-      this.broadcastMcpServers();
-
-      this.mcp
-        .establishConnection(result.serverId)
-        .catch((error) => {
-          console.error(
-            "[Agent handleMcpOAuthCallback] Connection establishment failed:",
-            error
-          );
-        })
-        .finally(() => {
-          this.broadcastMcpServers();
-        });
+      this.mcp.establishConnection(result.serverId).catch((error) => {
+        console.error(
+          "[Agent handleMcpOAuthCallback] Connection establishment failed:",
+          error
+        );
+      });
     }
+
+    this.broadcastMcpServers();
 
     // Return the HTTP response for the OAuth callback
     return this.handleOAuthCallbackResponse(result, request);
