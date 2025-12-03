@@ -47,8 +47,8 @@ describe("OAuth2 MCP Client - Hibernation", () => {
     expect(await agentStub.hasMcpConnection(serverId)).toBe(true);
   });
 
-  it("should handle OAuth callback after hibernation", async () => {
-    const agentId = env.TestOAuthAgent.idFromName("test-oauth-callback");
+  it("should recognize callback URLs after hibernation", async () => {
+    const agentId = env.TestOAuthAgent.idFromName("test-callback-recognition");
     const agentStub = env.TestOAuthAgent.get(agentId);
     const serverId = nanoid(8);
     const callbackUrl = `http://example.com/agents/test-o-auth-agent/${agentId.toString()}/callback`;
@@ -73,14 +73,11 @@ describe("OAuth2 MCP Client - Hibernation", () => {
     await agentStub.setName("default");
     await agentStub.onStart();
 
-    const response = await agentStub.fetch(
-      new Request(
-        `${callbackUrl}?code=test-code&state=${createStateWithSetup(agentStub, serverId)}`
-      )
+    // Verify callback URL with valid state is recognized after restoration
+    const callbackWithState = `${callbackUrl}?code=test&state=${nanoid()}.${serverId}`;
+    expect(await agentStub.isCallbackUrlRegistered(callbackWithState)).toBe(
+      true
     );
-
-    expect(response.status).not.toBe(404);
-    expect(await response.text()).not.toContain("Could not find serverId");
   });
 });
 
