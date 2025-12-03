@@ -369,15 +369,45 @@ export class TestOAuthAgent extends Agent<Env> {
   configureOAuthForTest(config: {
     successRedirect?: string;
     errorRedirect?: string;
+    useJsonHandler?: boolean; // Use built-in JSON response handler for testing
   }): void {
-    this.mcp.configureOAuthCallback(config);
+    if (config.useJsonHandler) {
+      this.mcp.configureOAuthCallback({
+        customHandler: (result: {
+          serverId: string;
+          authSuccess: boolean;
+          authError?: string;
+        }) => {
+          return new Response(
+            JSON.stringify({
+              custom: true,
+              serverId: result.serverId,
+              success: result.authSuccess,
+              error: result.authError
+            }),
+            {
+              status: result.authSuccess ? 200 : 401,
+              headers: { "content-type": "application/json" }
+            }
+          );
+        }
+      });
+    } else {
+      this.mcp.configureOAuthCallback(config);
+    }
   }
+
+  private mockStateStorage: Map<
+    string,
+    { serverId: string; createdAt: number }
+  > = new Map();
 
   private createMockMcpConnection(
     serverId: string,
     serverUrl: string,
     connectionState: "ready" | "authenticating" | "connecting" = "ready"
   ): MCPClientConnection {
+    const self = this;
     return {
       url: new URL(serverUrl),
       connectionState,
@@ -391,7 +421,44 @@ export class TestOAuthAgent extends Agent<Env> {
         transport: {
           authProvider: {
             clientId: "test-client-id",
-            authUrl: "http://example.com/oauth/authorize"
+            serverId: serverId,
+            authUrl: "http://example.com/oauth/authorize",
+            async checkState(
+              state: string
+            ): Promise<{ valid: boolean; serverId?: string; error?: string }> {
+              const parts = state.split(".");
+              if (parts.length !== 2) {
+                return { valid: false, error: "Invalid state format" };
+              }
+              const [nonce, stateServerId] = parts;
+              const stored = self.mockStateStorage.get(nonce);
+              if (!stored) {
+                return {
+                  valid: false,
+                  error: "State not found or already used"
+                };
+              }
+              // Note: checkState does NOT consume the state
+              if (stored.serverId !== stateServerId) {
+                return { valid: false, error: "State serverId mismatch" };
+              }
+              const age = Date.now() - stored.createdAt;
+              if (age > 10 * 60 * 1000) {
+                return { valid: false, error: "State expired" };
+              }
+              return { valid: true, serverId: stateServerId };
+            },
+            async consumeState(state: string): Promise<void> {
+              const parts = state.split(".");
+              if (parts.length !== 2) {
+                return;
+              }
+              const [nonce] = parts;
+              self.mockStateStorage.delete(nonce);
+            },
+            async deleteCodeVerifier(): Promise<void> {
+              // No-op for tests
+            }
           }
         }
       },
@@ -404,6 +471,10 @@ export class TestOAuthAgent extends Agent<Env> {
     } as unknown as MCPClientConnection;
   }
 
+  saveStateForTest(nonce: string, serverId: string): void {
+    this.mockStateStorage.set(nonce, { serverId, createdAt: Date.now() });
+  }
+
   setupMockMcpConnection(
     serverId: string,
     serverName: string,
@@ -411,7 +482,6 @@ export class TestOAuthAgent extends Agent<Env> {
     callbackUrl: string,
     clientId?: string | null
   ): void {
-    // Save server to database with callback URL using SQL directly
     this.sql`
       INSERT OR REPLACE INTO cf_agents_mcp_servers (
         id, name, server_url, client_id, auth_url, callback_url, server_options
@@ -421,7 +491,7 @@ export class TestOAuthAgent extends Agent<Env> {
         ${serverUrl},
         ${clientId ?? null},
         ${null},
-        ${`${callbackUrl}/${serverId}`},
+        ${callbackUrl},
         ${null}
       )
     `;
@@ -479,6 +549,10 @@ export class TestOAuthAgent extends Agent<Env> {
 
   isCallbackUrlRegistered(callbackUrl: string): boolean {
     return this.mcp.isCallbackRequest(new Request(callbackUrl));
+  }
+
+  testIsCallbackRequest(request: Request): boolean {
+    return this.mcp.isCallbackRequest(request);
   }
 
   removeMcpConnection(serverId: string): void {
