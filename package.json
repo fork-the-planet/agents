@@ -69,7 +69,7 @@
     "vite-plugin-devtools-json": "^1.0.0",
     "vitest": "3.2.4",
     "vitest-browser-react": "^1.0.1",
-    "workers-ai-provider": "https://pkg.pr.new/cloudflare/ai/workers-ai-provider@338",
+    "workers-ai-provider": "^3.0.0",
     "wrangler": "^4.56.0",
     "zod": "^4.1.8"
   },
