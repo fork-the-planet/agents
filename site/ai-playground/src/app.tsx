@@ -628,15 +628,8 @@ const App = () => {
               </div>
             </section>
 
-            {activeModel?.properties.find(
-              (p: { property_id: string; value: string }) =>
-                p.property_id === "function_calling" && p.value === "true"
-            ) || params.useExternalProvider ? (
-              <>
-                <div className="bg-ai h-px mx-2 mt-2 opacity-25" />
-                <McpServers agent={agent} mcpState={mcp} mcpLogs={mcpLogs} />
-              </>
-            ) : null}
+            <div className="bg-ai h-px mx-2 mt-2 opacity-25" />
+            <McpServers agent={agent} mcpState={mcp} mcpLogs={mcpLogs} />
           </div>
 
           <div
