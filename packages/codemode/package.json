@@ -2,6 +2,14 @@
   "name": "@cloudflare/codemode",
   "version": "0.0.2",
   "description": "Code Mode: use LLMs to generate executable code that performs tool calls",
+  "repository": {
+    "directory": "packages/codemode",
+    "type": "git",
+    "url": "git+https://github.com/cloudflare/agents.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cloudflare/agents/issues"
+  },
   "dependencies": {
     "zod-to-ts": "^2.0.0"
   },

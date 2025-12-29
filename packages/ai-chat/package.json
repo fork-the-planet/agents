@@ -10,6 +10,14 @@
     "chat"
   ],
   "type": "module",
+  "repository": {
+    "directory": "packages/ai-chat",
+    "type": "git",
+    "url": "git+https://github.com/cloudflare/agents.git"
+  },
+  "bugs": {
+    "url": "https://github.com/cloudflare/agents/issues"
+  },
   "devDependencies": {
     "@types/react": "^19.2.7",
     "ai": "^6.0.0",
