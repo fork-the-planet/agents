@@ -102,24 +102,24 @@ import { Agent } from "agents";
 export class MyAgent extends Agent {
   async startTask(taskId: string, data: string) {
     // Start workflow - automatically tracked in Agent's database
-    const workflowId = await this.runWorkflow("PROCESSING_WORKFLOW", {
+    const instanceId = await this.runWorkflow("PROCESSING_WORKFLOW", {
       taskId,
       data
     });
 
-    return { workflowId };
+    return { instanceId };
   }
 
   // Called when workflow reports progress (progress is typed object)
   async onWorkflowProgress(
     workflowName: string,
-    workflowId: string,
+    instanceId: string,
     progress: unknown
   ) {
     // Cast to your progress type
     const p = progress as { step?: string; status?: string; percent?: number };
     console.log(
-      `Workflow ${workflowName}/${workflowId}: ${p.step} - ${p.status} (${(p.percent ?? 0) * 100}%)`
+      `Workflow ${workflowName}/${instanceId}: ${p.step} - ${p.status} (${(p.percent ?? 0) * 100}%)`
     );
 
     // Broadcast to connected clients
@@ -127,7 +127,7 @@ export class MyAgent extends Agent {
       JSON.stringify({
         type: "workflow-progress",
         workflowName,
-        workflowId,
+        instanceId,
         progress
       })
     );
@@ -136,10 +136,10 @@ export class MyAgent extends Agent {
   // Called when workflow completes
   async onWorkflowComplete(
     workflowName: string,
-    workflowId: string,
+    instanceId: string,
     result?: unknown
   ) {
-    console.log(`Workflow ${workflowName}/${workflowId} completed:`, result);
+    console.log(`Workflow ${workflowName}/${instanceId} completed:`, result);
   }
 
   // Method called by workflow via RPC
@@ -188,7 +188,7 @@ Base class for Workflows that integrate with Agents.
 **Properties:**
 
 - `agent` - Typed stub for calling Agent methods via RPC
-- `workflowId` - The workflow instance ID
+- `instanceId` - The workflow instance ID
 - `workflowName` - The workflow binding name
 - `env` - Environment bindings
 
@@ -232,7 +232,7 @@ Methods added to the `Agent` class:
 Start a workflow and track it in the Agent's database.
 
 ```typescript
-const workflowId = await this.runWorkflow(
+const instanceId = await this.runWorkflow(
   "MY_WORKFLOW",
   { taskId: "123", data: "process this" },
   {
@@ -253,33 +253,33 @@ const workflowId = await this.runWorkflow(
 
 **Returns:** Workflow instance ID
 
-#### `sendWorkflowEvent(workflowName, workflowId, event)`
+#### `sendWorkflowEvent(workflowName, instanceId, event)`
 
 Send an event to a running workflow.
 
 ```typescript
-await this.sendWorkflowEvent("MY_WORKFLOW", workflowId, {
+await this.sendWorkflowEvent("MY_WORKFLOW", instanceId, {
   type: "approval",
   payload: { approved: true }
 });
 ```
 
-#### `getWorkflowStatus(workflowName, workflowId)`
+#### `getWorkflowStatus(workflowName, instanceId)`
 
 Get the status of a workflow and update tracking record.
 
 ```typescript
-const status = await this.getWorkflowStatus("MY_WORKFLOW", workflowId);
+const status = await this.getWorkflowStatus("MY_WORKFLOW", instanceId);
 // status: { status: 'running', output: null, error: null }
 ```
 
-#### `getWorkflow(workflowId)`
+#### `getWorkflow(instanceId)`
 
 Get a tracked workflow by ID.
 
 ```typescript
-const workflow = this.getWorkflow(workflowId);
-// { workflowId, workflowName, status, metadata, error, createdAt, ... }
+const workflow = this.getWorkflow(instanceId);
+// { instanceId, workflowName, status, metadata, error, createdAt, ... }
 ```
 
 #### `getWorkflows(criteria?)`
@@ -306,12 +306,12 @@ const recent = this.getWorkflows({
 });
 ```
 
-#### `deleteWorkflow(workflowId)`
+#### `deleteWorkflow(instanceId)`
 
 Delete a single workflow tracking record.
 
 ```typescript
-const deleted = this.deleteWorkflow(workflowId);
+const deleted = this.deleteWorkflow(instanceId);
 // true if deleted, false if not found
 ```
 
@@ -341,7 +341,7 @@ class MyAgent extends Agent {
   // Called when workflow reports progress (progress is typed object)
   async onWorkflowProgress(
     workflowName: string,
-    workflowId: string,
+    instanceId: string,
     progress: unknown
   ) {
     // Cast to your progress type
@@ -351,21 +351,21 @@ class MyAgent extends Agent {
   // Called when workflow completes successfully
   async onWorkflowComplete(
     workflowName: string,
-    workflowId: string,
+    instanceId: string,
     result?: unknown
   ) {}
 
   // Called when workflow encounters an error
   async onWorkflowError(
     workflowName: string,
-    workflowId: string,
+    instanceId: string,
     error: string
   ) {}
 
   // Called when workflow sends a custom event
   async onWorkflowEvent(
     workflowName: string,
-    workflowId: string,
+    instanceId: string,
     event: unknown
   ) {}
 
@@ -383,16 +383,16 @@ Convenience methods for human-in-the-loop approval flows:
 ```typescript
 class MyAgent extends Agent {
   // Approve a waiting workflow
-  async handleApproval(workflowId: string, userId: string) {
-    await this.approveWorkflow(workflowId, {
+  async handleApproval(instanceId: string, userId: string) {
+    await this.approveWorkflow(instanceId, {
       reason: "Approved by admin",
       metadata: { approvedBy: userId }
     });
   }
 
   // Reject a waiting workflow
-  async handleRejection(workflowId: string, reason: string) {
-    await this.rejectWorkflow(workflowId, { reason });
+  async handleRejection(instanceId: string, reason: string) {
+    await this.rejectWorkflow(instanceId, { reason });
   }
 }
 ```
@@ -464,7 +464,7 @@ export class DataProcessingWorkflow extends AgentWorkflow<
 class MyAgent extends Agent {
   async onWorkflowProgress(
     workflowName: string,
-    workflowId: string,
+    instanceId: string,
     progress: unknown
   ) {
     // Broadcast progress to all connected clients
@@ -472,7 +472,7 @@ class MyAgent extends Agent {
       JSON.stringify({
         type: "processing-progress",
         workflowName,
-        workflowId,
+        instanceId,
         progress
       })
     );
@@ -520,16 +520,16 @@ export class ApprovalWorkflow extends AgentWorkflow<MyAgent, RequestParams> {
 // Agent using the built-in approval methods
 class MyAgent extends Agent {
   // Approve a waiting workflow
-  async handleApproval(workflowId: string, userId: string) {
-    await this.approveWorkflow(workflowId, {
+  async handleApproval(instanceId: string, userId: string) {
+    await this.approveWorkflow(instanceId, {
       reason: "Approved by admin",
       metadata: { approvedBy: userId }
     });
   }
 
   // Reject a waiting workflow
-  async handleRejection(workflowId: string, reason: string) {
-    await this.rejectWorkflow(workflowId, { reason });
+  async handleRejection(instanceId: string, reason: string) {
+    await this.rejectWorkflow(instanceId, { reason });
   }
 }
 ```
@@ -648,7 +648,7 @@ export class ETLWorkflow extends AgentWorkflow<
 class MyAgent extends Agent {
   async onWorkflowProgress(
     workflowName: string,
-    workflowId: string,
+    instanceId: string,
     progress: unknown
   ) {
     const p = progress as PipelineProgress;
@@ -688,18 +688,18 @@ await step.mergeAgentState({ progress: 0.5 });
 
 ```typescript
 // Send event to waiting workflow (generic)
-await this.sendWorkflowEvent("MY_WORKFLOW", workflowId, {
+await this.sendWorkflowEvent("MY_WORKFLOW", instanceId, {
   type: "custom-event",
   payload: { action: "proceed" }
 });
 
 // Approve/reject workflows using convenience methods
-await this.approveWorkflow(workflowId, {
+await this.approveWorkflow(instanceId, {
   reason: "Approved by admin",
   metadata: { approvedBy: userId }
 });
 
-await this.rejectWorkflow(workflowId, {
+await this.rejectWorkflow(instanceId, {
   reason: "Request denied"
 });
 
@@ -717,9 +717,9 @@ const approvalData = await this.waitForApproval(step, { timeout: "7 days" });
 
 ```typescript
 // Option 1: Cleanup immediately on completion
-async onWorkflowComplete(workflowName, workflowId, result) {
+async onWorkflowComplete(workflowName, instanceId, result) {
   // Process result first, then delete
-  this.deleteWorkflow(workflowId);
+  this.deleteWorkflow(instanceId);
 }
 
 // Option 2: Scheduled cleanup (keep recent history)
