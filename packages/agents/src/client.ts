@@ -285,19 +285,42 @@ export class AgentClient<State = unknown> extends PartySocket {
       this.identified = false;
       this._resetReady();
 
-      // Reject all pending calls
-      const error = new Error("Connection closed");
-      for (const pending of this._pendingCalls.values()) {
-        pending.reject(error);
-        pending.stream?.onError?.("Connection closed");
-      }
-      this._pendingCalls.clear();
+      // Reject any remaining pending calls (e.g., from unexpected disconnect)
+      this._rejectPendingCalls("Connection closed");
     });
+  }
+
+  /**
+   * Reject all pending RPC calls with the given reason.
+   */
+  private _rejectPendingCalls(reason: string) {
+    const error = new Error(reason);
+    for (const pending of this._pendingCalls.values()) {
+      pending.reject(error);
+      pending.stream?.onError?.(reason);
+    }
+    this._pendingCalls.clear();
   }
 
   setState(state: State) {
     this.send(JSON.stringify({ state, type: MessageType.CF_AGENT_STATE }));
     this.options.onStateUpdate?.(state, "client");
+  }
+
+  /**
+   * Close the connection and immediately reject all pending RPC calls.
+   * This provides immediate feedback on intentional close rather than
+   * waiting for the WebSocket close handshake to complete.
+   *
+   * Note: Any calls made after `close()` will be rejected when the
+   * underlying WebSocket close event fires.
+   */
+  close(code?: number, reason?: string) {
+    // Immediately reject all pending calls on intentional close
+    this._rejectPendingCalls("Connection closed");
+
+    // Then close the underlying socket
+    super.close(code, reason);
   }
 
   /**
