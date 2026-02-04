@@ -43,9 +43,11 @@ The router matches both the original name and kebab-case version, so these all w
 
 ---
 
-## Using `routeAgentRequest()`
+## Basic Usage
 
-The `routeAgentRequest()` function is the main entry point for agent routing:
+### `routeAgentRequest()`
+
+The main entry point for agent routing. Handles both HTTP requests and WebSocket upgrades:
 
 ```typescript
 import { routeAgentRequest } from "agents";
@@ -65,26 +67,31 @@ export default {
 };
 ```
 
-### Enabling CORS
+### `getAgentByName()`
 
-For cross-origin requests (common when your frontend is on a different domain):
-
-```typescript
-const response = await routeAgentRequest(request, env, {
-  cors: true // Enable default CORS headers
-});
-```
-
-Or with custom CORS headers:
+Get a specific agent instance for server-side RPC calls or request forwarding:
 
 ```typescript
-const response = await routeAgentRequest(request, env, {
-  cors: {
-    "Access-Control-Allow-Origin": "https://myapp.com",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization"
+import { getAgentByName, routeAgentRequest } from "agents";
+
+export default {
+  async fetch(request: Request, env: Env) {
+    const url = new URL(request.url);
+
+    // API endpoint that interacts with an agent
+    if (url.pathname === "/api/increment") {
+      const counter = await getAgentByName(env.Counter, "global-counter");
+      const newCount = await counter.increment();
+      return Response.json({ count: newCount });
+    }
+
+    // Regular agent routing
+    return (
+      (await routeAgentRequest(request, env)) ??
+      new Response("Not found", { status: 404 })
+    );
   }
-});
+};
 ```
 
 ---
@@ -161,6 +168,131 @@ const agent = useAgent({
   name: `game-${gameId}-${Date.now()}`
 });
 ```
+
+---
+
+## Routing Options
+
+Both `routeAgentRequest()` and `getAgentByName()` accept options for customizing routing behavior.
+
+### CORS
+
+For cross-origin requests (common when your frontend is on a different domain):
+
+```typescript
+const response = await routeAgentRequest(request, env, {
+  cors: true // Enable default CORS headers
+});
+```
+
+Or with custom CORS headers:
+
+```typescript
+const response = await routeAgentRequest(request, env, {
+  cors: {
+    "Access-Control-Allow-Origin": "https://myapp.com",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization"
+  }
+});
+```
+
+### Location Hints
+
+For latency-sensitive applications, hint where the agent should run:
+
+```typescript
+// With getAgentByName
+const agent = await getAgentByName(env.MyAgent, "instance-name", {
+  locationHint: "enam" // Eastern North America
+});
+
+// With routeAgentRequest (applies to all matched agents)
+const response = await routeAgentRequest(request, env, {
+  locationHint: "enam"
+});
+```
+
+Available location hints: `wnam`, `enam`, `sam`, `weur`, `eeur`, `apac`, `oc`, `afr`, `me`
+
+### Jurisdiction
+
+For data residency requirements:
+
+```typescript
+// With getAgentByName
+const agent = await getAgentByName(env.MyAgent, "instance-name", {
+  jurisdiction: "eu" // EU jurisdiction
+});
+
+// With routeAgentRequest (applies to all matched agents)
+const response = await routeAgentRequest(request, env, {
+  jurisdiction: "eu"
+});
+```
+
+### Props
+
+Since agents are instantiated by the runtime rather than constructed directly, `props` provides a way to pass initialization arguments:
+
+```typescript
+const agent = await getAgentByName(env.MyAgent, "instance-name", {
+  props: {
+    userId: session.userId,
+    config: { maxRetries: 3 }
+  }
+});
+```
+
+Props are passed to the agent's `onStart` lifecycle method:
+
+```typescript
+class MyAgent extends Agent<Env, State> {
+  private userId?: string;
+  private config?: { maxRetries: number };
+
+  async onStart(props?: { userId: string; config: { maxRetries: number } }) {
+    this.userId = props?.userId;
+    this.config = props?.config;
+  }
+}
+```
+
+When using `props` with `routeAgentRequest`, the same props are passed to whichever agent matches the URL. This works well for universal context like authentication:
+
+```typescript
+export default {
+  async fetch(request, env) {
+    const session = await getSession(request);
+    return routeAgentRequest(request, env, {
+      props: { userId: session.userId, role: session.role }
+    });
+  }
+};
+```
+
+For agent-specific initialization, use `getAgentByName` instead where you control exactly which agent receives the props.
+
+> **Note:** For `McpAgent`, props are automatically stored and accessible via `this.props`. See [MCP Servers](/mcp-servers) for details.
+
+### Hooks
+
+`routeAgentRequest` supports hooks for intercepting requests before they reach agents:
+
+```typescript
+const response = await routeAgentRequest(request, env, {
+  onBeforeConnect: (req, lobby) => {
+    // Called before WebSocket connections
+    // Return a Response to reject, Request to modify, or void to continue
+  },
+  onBeforeRequest: (req, lobby) => {
+    // Called before HTTP requests
+    // Return a Response to reject, Request to modify, or void to continue
+  }
+});
+```
+
+These hooks are useful for authentication and validation. See [Securing Agents](/securing-agents) for detailed examples.
 
 ---
 
@@ -357,86 +489,6 @@ When identity is disabled:
 
 ---
 
-## Server-Side Agent Access
-
-You can access agents from your Worker code using `getAgentByName()` for RPC calls:
-
-```typescript
-import { getAgentByName, routeAgentRequest } from "agents";
-
-export default {
-  async fetch(request: Request, env: Env) {
-    const url = new URL(request.url);
-
-    // API endpoint that interacts with an agent
-    if (url.pathname === "/api/increment") {
-      const counter = await getAgentByName(env.Counter, "global-counter");
-      const newCount = await counter.increment();
-      return Response.json({ count: newCount });
-    }
-
-    // Regular agent routing
-    return (
-      (await routeAgentRequest(request, env)) ??
-      new Response("Not found", { status: 404 })
-    );
-  }
-};
-```
-
-### With Location Hints
-
-For latency-sensitive applications, you can hint where the agent should run:
-
-```typescript
-const agent = await getAgentByName(env.MyAgent, "instance-name", {
-  locationHint: "enam" // Eastern North America
-});
-```
-
-Available location hints: `wnam`, `enam`, `sam`, `weur`, `eeur`, `apac`, `oc`, `afr`, `me`
-
-### With Jurisdiction
-
-For data residency requirements:
-
-```typescript
-const agent = await getAgentByName(env.MyAgent, "instance-name", {
-  jurisdiction: "eu" // EU jurisdiction
-});
-```
-
-### With Props
-
-Since agents are instantiated by the runtime rather than constructed directly, `props` provides a way to pass initialization arguments:
-
-```typescript
-const agent = await getAgentByName(env.MyAgent, "instance-name", {
-  props: {
-    userId: session.userId,
-    config: { maxRetries: 3 }
-  }
-});
-```
-
-Props are passed to the agent's `onStart` lifecycle method:
-
-```typescript
-class MyAgent extends Agent<Env, State> {
-  private userId?: string;
-  private config?: { maxRetries: number };
-
-  async onStart(props?: { userId: string; config: { maxRetries: number } }) {
-    this.userId = props?.userId;
-    this.config = props?.config;
-  }
-}
-```
-
-> **Note:** For `McpAgent`, props are automatically stored and accessible via `this.props`. See [MCP Servers](/mcp-servers) for details.
-
----
-
 ## Sub-Paths and HTTP Methods
 
 Requests can include sub-paths after the instance name. These are passed to your agent's `onRequest()` handler:
@@ -522,6 +574,39 @@ Each agent is accessed via its own path:
 
 ---
 
+## Routing with Authentication
+
+Check authentication before routing to agents:
+
+```typescript
+export default {
+  async fetch(request: Request, env: Env) {
+    const url = new URL(request.url);
+
+    // Protect agent routes
+    if (url.pathname.startsWith("/agents/")) {
+      const user = await authenticate(request, env);
+      if (!user) {
+        return new Response("Unauthorized", { status: 401 });
+      }
+
+      // Optionally, enforce that users can only access their own agents
+      const instanceName = url.pathname.split("/")[3];
+      if (instanceName !== `user-${user.id}`) {
+        return new Response("Forbidden", { status: 403 });
+      }
+    }
+
+    return (
+      (await routeAgentRequest(request, env)) ??
+      new Response("Not found", { status: 404 })
+    );
+  }
+};
+```
+
+---
+
 ## Request Flow
 
 Here's how a request flows through the system:
@@ -557,39 +642,6 @@ Here's how a request flows through the system:
 │ WebSocket? → onConnect(), onMessage()
 │ HTTP?      → onRequest()            │
 └─────────────────────────────────────┘
-```
-
----
-
-## Routing with Authentication
-
-Check authentication before routing to agents:
-
-```typescript
-export default {
-  async fetch(request: Request, env: Env) {
-    const url = new URL(request.url);
-
-    // Protect agent routes
-    if (url.pathname.startsWith("/agents/")) {
-      const user = await authenticate(request, env);
-      if (!user) {
-        return new Response("Unauthorized", { status: 401 });
-      }
-
-      // Optionally, enforce that users can only access their own agents
-      const instanceName = url.pathname.split("/")[3];
-      if (instanceName !== `user-${user.id}`) {
-        return new Response("Forbidden", { status: 403 });
-      }
-    }
-
-    return (
-      (await routeAgentRequest(request, env)) ??
-      new Response("Not found", { status: 404 })
-    );
-  }
-};
 ```
 
 ---
@@ -631,11 +683,16 @@ The error message lists available agents. Check:
 
 Routes a request to the appropriate agent.
 
-| Parameter      | Type                     | Description                     |
-| -------------- | ------------------------ | ------------------------------- |
-| `request`      | `Request`                | The incoming request            |
-| `env`          | `Env`                    | Environment with agent bindings |
-| `options.cors` | `boolean \| HeadersInit` | Enable CORS headers             |
+| Parameter                 | Type                      | Description                                         |
+| ------------------------- | ------------------------- | --------------------------------------------------- |
+| `request`                 | `Request`                 | The incoming request                                |
+| `env`                     | `Env`                     | Environment with agent bindings                     |
+| `options.cors`            | `boolean \| HeadersInit`  | Enable CORS headers                                 |
+| `options.props`           | `Record<string, unknown>` | Props passed to whichever agent handles the request |
+| `options.locationHint`    | `string`                  | Preferred location for agent instances              |
+| `options.jurisdiction`    | `string`                  | Data jurisdiction for agent instances               |
+| `options.onBeforeConnect` | `Function`                | Callback before WebSocket connections               |
+| `options.onBeforeRequest` | `Function`                | Callback before HTTP requests                       |
 
 **Returns:** `Promise<Response \| undefined>` - Response if matched, undefined if no agent route
 
