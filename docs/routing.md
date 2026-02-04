@@ -406,6 +406,35 @@ const agent = await getAgentByName(env.MyAgent, "instance-name", {
 });
 ```
 
+### With Props
+
+Since agents are instantiated by the runtime rather than constructed directly, `props` provides a way to pass initialization arguments:
+
+```typescript
+const agent = await getAgentByName(env.MyAgent, "instance-name", {
+  props: {
+    userId: session.userId,
+    config: { maxRetries: 3 }
+  }
+});
+```
+
+Props are passed to the agent's `onStart` lifecycle method:
+
+```typescript
+class MyAgent extends Agent<Env, State> {
+  private userId?: string;
+  private config?: { maxRetries: number };
+
+  async onStart(props?: { userId: string; config: { maxRetries: number } }) {
+    this.userId = props?.userId;
+    this.config = props?.config;
+  }
+}
+```
+
+> **Note:** For `McpAgent`, props are automatically stored and accessible via `this.props`. See [MCP Servers](/mcp-servers) for details.
+
 ---
 
 ## Sub-Paths and HTTP Methods
@@ -614,12 +643,13 @@ Routes a request to the appropriate agent.
 
 Get an agent instance by name for server-side RPC or request forwarding.
 
-| Parameter              | Type                        | Description            |
-| ---------------------- | --------------------------- | ---------------------- |
-| `namespace`            | `DurableObjectNamespace<T>` | Agent binding from env |
-| `name`                 | `string`                    | Instance name          |
-| `options.locationHint` | `string`                    | Preferred location     |
-| `options.jurisdiction` | `string`                    | Data jurisdiction      |
+| Parameter              | Type                        | Description                             |
+| ---------------------- | --------------------------- | --------------------------------------- |
+| `namespace`            | `DurableObjectNamespace<T>` | Agent binding from env                  |
+| `name`                 | `string`                    | Instance name                           |
+| `options.locationHint` | `string`                    | Preferred location                      |
+| `options.jurisdiction` | `string`                    | Data jurisdiction                       |
+| `options.props`        | `Record<string, unknown>`   | Initialization properties for `onStart` |
 
 **Returns:** `Promise<DurableObjectStub<T>>` - Typed stub for calling agent methods or forwarding requests
 
