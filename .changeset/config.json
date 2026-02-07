@@ -10,5 +10,6 @@
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
-  "ignore": ["@cloudflare/agents-*"]
+  "ignore": ["@cloudflare/agents-*"],
+  "onlyUpdatePeerDependentsWhenOutOfRange": true
 }
