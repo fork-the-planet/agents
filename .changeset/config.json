@@ -11,5 +11,7 @@
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
   "ignore": ["@cloudflare/agents-*"],
-  "updateInternalDependents": "always"
+  "___experimentalUnsafeOptions_WILL_CHANGE_IN_PATCH": {
+    "onlyUpdatePeerDependentsWhenOutOfRange": true
+  }
 }
