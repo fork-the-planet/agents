@@ -288,6 +288,18 @@ const STATE_WAS_CHANGED = "cf_state_was_changed";
 const DEFAULT_STATE = {} as unknown;
 
 /**
+ * Internal key used to store the readonly flag in connection state.
+ * Prefixed with _cf_ to avoid collision with user state keys.
+ */
+const CF_READONLY_KEY = "_cf_readonly";
+
+/**
+ * Tracks which agent constructors have already emitted the onStateUpdate
+ * deprecation warning, so it fires at most once per class.
+ */
+const _onStateUpdateWarnedClasses = new WeakSet<Function>();
+
+/**
  * Default options for Agent configuration.
  * Child classes can override specific options without spreading.
  */
@@ -398,6 +410,27 @@ export class Agent<
   private _disposables = new DisposableStore();
   private _destroyed = false;
 
+  /**
+   * Stores raw state accessors for wrapped connections.
+   * Used by setConnectionReadonly/isConnectionReadonly to read/write the
+   * _cf_readonly flag without going through the user-facing state/setState.
+   */
+  private _rawStateAccessors = new WeakMap<
+    Connection,
+    {
+      getRaw: () => Record<string, unknown> | null;
+      setRaw: (state: unknown) => unknown;
+    }
+  >();
+
+  /**
+   * Cached persistence-hook dispatch mode, computed once in the constructor.
+   * - "new"  → call onStateChanged
+   * - "old"  → call onStateUpdate (deprecated)
+   * - "none" → neither hook is overridden, skip entirely
+   */
+  private _persistenceHookMode: "new" | "old" | "none" = "none";
+
   private _ParentClass: typeof Agent<Env, State> =
     Object.getPrototypeOf(this).constructor;
 
@@ -445,7 +478,7 @@ export class Agent<
         if (this.initialState !== DEFAULT_STATE) {
           this._state = this.initialState;
           // Persist the fixed state to prevent future parse errors
-          this.setState(this.initialState);
+          this._setStateInternal(this.initialState);
         } else {
           // No initialState defined - clear corrupted data to prevent infinite retry loop
           this.sql`DELETE FROM cf_agents_state WHERE id = ${STATE_ROW_ID}`;
@@ -465,7 +498,7 @@ export class Agent<
     }
     // initial state provided, so we set the state,
     // update db and return the initial state
-    this.setState(this.initialState);
+    this._setStateInternal(this.initialState);
     return this.initialState;
   }
 
@@ -648,6 +681,44 @@ export class Agent<
         this.observability?.emit(event);
       })
     );
+    // Compute persistence-hook dispatch mode once.
+    // Throws immediately if both hooks are overridden on the same class.
+    {
+      const proto = Object.getPrototypeOf(this);
+      const hasOwnNew = Object.prototype.hasOwnProperty.call(
+        proto,
+        "onStateChanged"
+      );
+      const hasOwnOld = Object.prototype.hasOwnProperty.call(
+        proto,
+        "onStateUpdate"
+      );
+
+      if (hasOwnNew && hasOwnOld) {
+        throw new Error(
+          `[Agent] Cannot override both onStateChanged and onStateUpdate. ` +
+            `Remove onStateUpdate — it has been renamed to onStateChanged.`
+        );
+      }
+
+      if (hasOwnOld) {
+        const ctor = this.constructor;
+        if (!_onStateUpdateWarnedClasses.has(ctor)) {
+          _onStateUpdateWarnedClasses.add(ctor);
+          console.warn(
+            `[Agent] onStateUpdate is deprecated. Rename to onStateChanged — the behavior is identical.`
+          );
+        }
+      }
+
+      const base = Agent.prototype;
+      if (proto.onStateChanged !== base.onStateChanged) {
+        this._persistenceHookMode = "new";
+      } else if (proto.onStateUpdate !== base.onStateUpdate) {
+        this._persistenceHookMode = "old";
+      }
+      // default "none" already set in field initializer
+    }
 
     const _onRequest = this.onRequest.bind(this);
     this.onRequest = (request: Request) => {
@@ -671,6 +742,7 @@ export class Agent<
 
     const _onMessage = this.onMessage.bind(this);
     this.onMessage = async (connection: Connection, message: WSMessage) => {
+      this._ensureConnectionWrapped(connection);
       return agentContext.run(
         { agent: this, connection, request: undefined, email: undefined },
         async () => {
@@ -690,7 +762,30 @@ export class Agent<
           }
 
           if (isStateUpdateMessage(parsed)) {
-            this._setStateInternal(parsed.state as State, connection);
+            // Check if connection is readonly
+            if (this.isConnectionReadonly(connection)) {
+              // Send error response back to the connection
+              connection.send(
+                JSON.stringify({
+                  type: MessageType.CF_AGENT_STATE_ERROR,
+                  error: "Connection is readonly"
+                })
+              );
+              return;
+            }
+            try {
+              this._setStateInternal(parsed.state as State, connection);
+            } catch (e) {
+              // validateStateChange (or another sync error) rejected the update.
+              // Log the full error server-side, send a generic message to the client.
+              console.error("[Agent] State update rejected:", e);
+              connection.send(
+                JSON.stringify({
+                  type: MessageType.CF_AGENT_STATE_ERROR,
+                  error: "State update rejected"
+                })
+              );
+            }
             return;
           }
 
@@ -790,11 +885,18 @@ export class Agent<
 
     const _onConnect = this.onConnect.bind(this);
     this.onConnect = (connection: Connection, ctx: ConnectionContext) => {
+      this._ensureConnectionWrapped(connection);
       // TODO: This is a hack to ensure the state is sent after the connection is established
       // must fix this
       return agentContext.run(
         { agent: this, connection, request: ctx.request, email: undefined },
         async () => {
+          // Check if connection should be readonly before sending any messages
+          // so that the flag is set before the client can respond
+          if (this.shouldConnectionBeReadonly(connection, ctx)) {
+            this.setConnectionReadonly(connection, true);
+          }
+
           // Send agent identity first so client knows which instance it's connected to
           // Can be disabled via static options for security-sensitive instance names
           if (this._resolvedOptions.sendIdentityOnConnect) {
@@ -960,11 +1062,11 @@ export class Agent<
                 },
                 this.ctx
               );
-              await this.onStateUpdate(nextState, source);
+              await this._callStatePersistenceHook(nextState, source);
             }
           );
         } catch (e) {
-          // onStateUpdate errors should not affect state or broadcasts
+          // onStateChanged/onStateUpdate errors should not affect state or broadcasts
           try {
             await this.onError(e);
           } catch {
@@ -978,9 +1080,165 @@ export class Agent<
   /**
    * Update the Agent's state
    * @param state New state to set
+   * @throws Error if called from a readonly connection context
    */
   setState(state: State): void {
+    // Check if the current context has a readonly connection
+    const store = agentContext.getStore();
+    if (store?.connection && this.isConnectionReadonly(store.connection)) {
+      throw new Error("Connection is readonly");
+    }
     this._setStateInternal(state, "server");
+  }
+
+  /**
+   * Wraps connection.state and connection.setState so that the internal
+   * _cf_readonly flag is hidden from user code and cannot be accidentally
+   * overwritten. Must be called before any user code sees the connection.
+   *
+   * Idempotent — safe to call multiple times on the same connection.
+   */
+  private _ensureConnectionWrapped(connection: Connection) {
+    if (this._rawStateAccessors.has(connection)) return;
+
+    // Determine whether `state` is an accessor (getter) or a data property.
+    // partyserver always defines `state` as a getter via Object.defineProperties,
+    // but we handle the data-property case to stay robust for hibernate: false
+    // and any future connection implementations.
+    const descriptor = Object.getOwnPropertyDescriptor(connection, "state");
+
+    let getRaw: () => Record<string, unknown> | null;
+    let setRaw: (state: unknown) => unknown;
+
+    if (descriptor?.get) {
+      // Accessor property — bind the original getter directly.
+      // The getter reads from the serialized WebSocket attachment, so it
+      // always returns the latest value even after setState updates it.
+      getRaw = descriptor.get.bind(connection) as () => Record<
+        string,
+        unknown
+      > | null;
+      setRaw = connection.setState.bind(connection);
+    } else {
+      // Data property — track raw state in a closure variable.
+      // Reading `connection.state` after our override would call our filtered
+      // getter (circular), so we snapshot the value here and keep it in sync.
+      let rawState = (connection.state ?? null) as Record<
+        string,
+        unknown
+      > | null;
+      getRaw = () => rawState;
+      setRaw = (state: unknown) => {
+        rawState = state as Record<string, unknown> | null;
+        return rawState;
+      };
+    }
+
+    this._rawStateAccessors.set(connection, { getRaw, setRaw });
+
+    const CF_KEY = CF_READONLY_KEY;
+
+    // Override state getter to hide the readonly flag from user code
+    Object.defineProperty(connection, "state", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        const raw = getRaw();
+        if (raw != null && typeof raw === "object" && CF_KEY in raw) {
+          const { [CF_KEY]: _, ...userState } = raw;
+          return Object.keys(userState).length > 0 ? userState : null;
+        }
+        return raw;
+      }
+    });
+
+    // Override setState to preserve the readonly flag when user sets state
+    Object.defineProperty(connection, "setState", {
+      configurable: true,
+      writable: true,
+      value(stateOrFn: unknown | ((prev: unknown) => unknown)) {
+        const raw = getRaw();
+        const readonlyFlag =
+          raw != null && typeof raw === "object"
+            ? (raw as Record<string, unknown>)[CF_KEY]
+            : undefined;
+
+        let newUserState: unknown;
+        if (typeof stateOrFn === "function") {
+          // Pass only the user-visible state (without the readonly flag) to the callback
+          let userVisible: unknown = raw;
+          if (raw != null && typeof raw === "object" && CF_KEY in raw) {
+            const { [CF_KEY]: _, ...rest } = raw;
+            userVisible = Object.keys(rest).length > 0 ? rest : null;
+          }
+          newUserState = (stateOrFn as (prev: unknown) => unknown)(userVisible);
+        } else {
+          newUserState = stateOrFn;
+        }
+
+        // Merge back the readonly flag if it was set
+        if (readonlyFlag !== undefined) {
+          if (newUserState != null && typeof newUserState === "object") {
+            return setRaw({
+              ...(newUserState as Record<string, unknown>),
+              [CF_KEY]: readonlyFlag
+            });
+          }
+          // User set null — store just the flag
+          return setRaw({ [CF_KEY]: readonlyFlag });
+        }
+        return setRaw(newUserState);
+      }
+    });
+  }
+
+  /**
+   * Mark a connection as readonly or readwrite
+   * @param connection The connection to mark
+   * @param readonly Whether the connection should be readonly (default: true)
+   */
+  setConnectionReadonly(connection: Connection, readonly = true) {
+    this._ensureConnectionWrapped(connection);
+    const accessors = this._rawStateAccessors.get(connection)!;
+    const raw = (accessors.getRaw() as Record<string, unknown> | null) ?? {};
+    if (readonly) {
+      accessors.setRaw({ ...raw, [CF_READONLY_KEY]: true });
+    } else {
+      // Remove the key entirely instead of storing false — avoids dead keys
+      // accumulating in the connection attachment.
+      const { [CF_READONLY_KEY]: _, ...rest } = raw;
+      accessors.setRaw(Object.keys(rest).length > 0 ? rest : null);
+    }
+  }
+
+  /**
+   * Check if a connection is marked as readonly
+   * @param connection The connection to check
+   * @returns True if the connection is readonly
+   */
+  isConnectionReadonly(connection: Connection): boolean {
+    const accessors = this._rawStateAccessors.get(connection);
+    if (accessors) {
+      return !!(accessors.getRaw() as Record<string, unknown> | null)?.[
+        CF_READONLY_KEY
+      ];
+    }
+    // Connection hasn't been wrapped yet — the flag can't have been set via
+    // setConnectionReadonly (which always wraps first), so default to false.
+    return false;
+  }
+
+  /**
+   * Override this method to determine if a connection should be readonly on connect
+   * @param _connection The connection that is being established
+   * @param _ctx Connection context
+   * @returns True if the connection should be readonly
+   */
+  shouldConnectionBeReadonly(
+    _connection: Connection,
+    _ctx: ConnectionContext
+  ): boolean {
+    return false;
   }
 
   /**
@@ -995,13 +1253,51 @@ export class Agent<
   }
 
   /**
-   * Called when the Agent's state is updated
+   * Called after the Agent's state has been persisted and broadcast to all clients.
+   * This is a notification hook — errors here are routed to onError and do not
+   * affect state persistence or client broadcasts.
+   *
+   * @param state Updated state
+   * @param source Source of the state update ("server" or a client connection)
+   */
+  // oxlint-disable-next-line eslint(no-unused-vars) -- params used by subclass overrides
+  onStateChanged(state: State | undefined, source: Connection | "server") {
+    // override this to handle state updates after persist + broadcast
+  }
+
+  /**
+   * @deprecated Renamed to `onStateChanged` — the behavior is identical.
+   * `onStateUpdate` will be removed in the next major version.
+   *
+   * Called after the Agent's state has been persisted and broadcast to all clients.
+   * This is a server-side notification hook. For the client-side state callback,
+   * see the `onStateUpdate` option in `useAgent` / `AgentClient`.
+   *
    * @param state Updated state
    * @param source Source of the state update ("server" or a client connection)
    */
   // oxlint-disable-next-line eslint(no-unused-vars) -- params used by subclass overrides
   onStateUpdate(state: State | undefined, source: Connection | "server") {
-    // override this to handle state updates
+    // override this to handle state updates (deprecated — use onStateChanged)
+  }
+
+  /**
+   * Dispatch to the appropriate persistence hook based on the mode
+   * cached in the constructor. No prototype walks at call time.
+   */
+  private async _callStatePersistenceHook(
+    state: State | undefined,
+    source: Connection | "server"
+  ): Promise<void> {
+    switch (this._persistenceHookMode) {
+      case "new":
+        await this.onStateChanged(state, source);
+        break;
+      case "old":
+        await this.onStateUpdate(state, source);
+        break;
+      // "none": neither hook overridden — skip
+    }
   }
 
   /**

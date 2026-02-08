@@ -40,6 +40,10 @@
         "name": "TestDestroyScheduleAgent"
       },
       {
+        "class_name": "TestReadonlyAgent",
+        "name": "TestReadonlyAgent"
+      },
+      {
         "class_name": "TestScheduleAgent",
         "name": "TestScheduleAgent"
       },
@@ -62,6 +66,14 @@
       {
         "class_name": "TestThrowingStateAgent",
         "name": "TestThrowingStateAgent"
+      },
+      {
+        "class_name": "TestPersistedStateAgent",
+        "name": "TestPersistedStateAgent"
+      },
+      {
+        "class_name": "TestBothHooksAgent",
+        "name": "TestBothHooksAgent"
       },
       {
         "class_name": "TestNoIdentityAgent",
@@ -101,12 +113,15 @@
         "TestOAuthAgent",
         "TestMcpJurisdiction",
         "TestDestroyScheduleAgent",
+        "TestReadonlyAgent",
         "TestScheduleAgent",
         "TestWorkflowAgent",
         "TestAddMcpServerAgent",
         "TestStateAgent",
         "TestStateAgentNoInitial",
         "TestThrowingStateAgent",
+        "TestPersistedStateAgent",
+        "TestBothHooksAgent",
         "TestNoIdentityAgent",
         "TestCallableAgent",
         "TestChildAgent"
