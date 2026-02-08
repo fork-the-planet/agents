@@ -32,7 +32,7 @@ import { Agent, routeAgentRequest, callable } from "agents";
 export type CounterState = { count: number };
 
 export class CounterAgent extends Agent<Env, CounterState> {
-  initialState: State = { count: 0 };
+  initialState = { count: 0 };
 
   @callable()
   increment() {
