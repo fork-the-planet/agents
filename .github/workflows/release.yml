@@ -5,6 +5,13 @@ on:
     branches:
       - main
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+
 jobs:
   release:
     permissions:
@@ -26,17 +33,6 @@ jobs:
           node-version: 24
           registry-url: "https://registry.npmjs.org"
           cache: "npm"
-
-      - name: Get Playwright version
-        id: playwright-version
-        run: echo "version=$(jq -r '.packages["node_modules/playwright"].version' package-lock.json)" >> $GITHUB_OUTPUT
-
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        id: playwright-cache
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}
 
       - run: npm ci
       - run: npm run build
