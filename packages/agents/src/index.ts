@@ -34,7 +34,10 @@ import type {
   WorkflowPage
 } from "./workflow-types";
 import { MCPConnectionState } from "./mcp/client-connection";
-import { DurableObjectOAuthClientProvider } from "./mcp/do-oauth-client-provider";
+import {
+  DurableObjectOAuthClientProvider,
+  type AgentsOAuthProvider
+} from "./mcp/do-oauth-client-provider";
 import type { TransportType } from "./mcp/types";
 import { genericObservability, type Observability } from "./observability";
 import { DisposableStore } from "./core/events";
@@ -3406,11 +3409,7 @@ export class Agent<
 
     const id = nanoid(8);
 
-    const authProvider = new DurableObjectOAuthClientProvider(
-      this.ctx.storage,
-      this.name,
-      callbackUrl
-    );
+    const authProvider = this.createOAuthProvider(callbackUrl);
     authProvider.serverId = id;
 
     // Use the transport type specified in options, or default to "auto"
@@ -3512,6 +3511,36 @@ export class Agent<
     }
 
     return mcpState;
+  }
+
+  /**
+   * Create the OAuth provider used when connecting to MCP servers that require authentication.
+   *
+   * Override this method in a subclass to supply a custom OAuth provider implementation,
+   * for example to use pre-registered client credentials, mTLS-based authentication,
+   * or any other OAuth flow beyond dynamic client registration.
+   *
+   * @example
+   * // Custom OAuth provider
+   * class MyAgent extends Agent {
+   *   createOAuthProvider(callbackUrl: string): AgentsOAuthProvider {
+   *     return new MyCustomOAuthProvider(
+   *       this.ctx.storage,
+   *       this.name,
+   *       callbackUrl
+   *     );
+   *   }
+   * }
+   *
+   * @param callbackUrl The OAuth callback URL for the authorization flow
+   * @returns An {@link AgentsOAuthProvider} instance used by {@link addMcpServer}
+   */
+  createOAuthProvider(callbackUrl: string): AgentsOAuthProvider {
+    return new DurableObjectOAuthClientProvider(
+      this.ctx.storage,
+      this.name,
+      callbackUrl
+    );
   }
 
   private broadcastMcpServers() {
