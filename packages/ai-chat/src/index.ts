@@ -250,6 +250,13 @@ export class AIChatAgent<
    */
   private _pendingResumeConnections: Set<string> = new Set();
 
+  /**
+   * Client tool schemas from the most recent chat request.
+   * Stored so they can be passed to onChatMessage during tool continuations.
+   * @internal
+   */
+  private _lastClientTools: ClientToolSchema[] | undefined;
+
   /** Array of chat messages for the current conversation */
   messages: ChatMessage[];
 
@@ -341,6 +348,9 @@ export class AIChatAgent<
             [key: string]: unknown;
           };
 
+          // Store client tools for use during tool continuations
+          this._lastClientTools = clientTools?.length ? clientTools : undefined;
+
           // Automatically transform any incoming messages
           const transformedMessages = autoTransformMessages(messages);
 
@@ -430,6 +440,7 @@ export class AIChatAgent<
           this._activeRequestId = null;
           this._streamChunkIndex = 0;
           this._pendingResumeConnections.clear();
+          this._lastClientTools = undefined;
           this.messages = [];
           this._broadcastChatMessage(
             { type: MessageType.CF_AGENT_CHAT_CLEAR },
@@ -521,7 +532,8 @@ export class AIChatAgent<
                             );
                           },
                           {
-                            abortSignal
+                            abortSignal,
+                            clientTools: this._lastClientTools
                           }
                         );
 
