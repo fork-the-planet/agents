@@ -233,6 +233,9 @@ export type Schedule<T = string> = {
     }
 );
 
+/**
+ * Represents the public state of a fiber.
+ */
 function getNextCronTime(cron: string) {
   const interval = parseCronExpression(cron);
   return interval.getNextDate();
@@ -2089,6 +2092,7 @@ export class Agent<
     await this._scheduleNextAlarm();
   };
 
+  // Fiber methods moved to agents/experimental/forever (withFibers mixin)
   /**
    * Destroy the Agent, removing all state and scheduled tasks
    */
