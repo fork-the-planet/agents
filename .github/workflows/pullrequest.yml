@@ -82,5 +82,5 @@ jobs:
       - run: npm ci
       - run: npm run build
 
-      - name: Publish agents package to pkg.pr.new
-        run: npx pkg-pr-new publish ./packages/agents
+      - name: Publish packages to pkg.pr.new
+        run: npx pkg-pr-new publish --peerDeps ./packages/*
