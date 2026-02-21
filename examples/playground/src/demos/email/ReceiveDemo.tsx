@@ -26,24 +26,25 @@ const codeSections: CodeSection[] = [
   {
     title: "Handle incoming emails",
     description:
-      "Override the onEmail method to process incoming messages. The agent parses the email with postal-mime and stores it in state. Use address-based routing to direct emails to specific agent instances.",
+      "Override the onEmail method to process incoming messages. The agent receives a parsed AgentEmail object with from, to, and a getRaw() method for full MIME parsing with postal-mime.",
     code: `import { Agent } from "agents";
+import type { AgentEmail } from "agents/email";
 import PostalMime from "postal-mime";
 
 class ReceiveEmailAgent extends Agent<Env> {
-  async onEmail(from: string, to: string, rawEmail: ReadableStream) {
-    const parser = new PostalMime();
-    const email = await parser.parse(rawEmail);
+  async onEmail(email: AgentEmail) {
+    const raw = await email.getRaw();
+    const parsed = await PostalMime.parse(raw);
 
     this.setState({
       ...this.state,
       emails: [...this.state.emails, {
         id: crypto.randomUUID(),
-        from,
-        to,
-        subject: email.subject,
-        text: email.text,
-        timestamp: Date.now(),
+        from: parsed.from?.address || email.from,
+        to: email.to,
+        subject: parsed.subject || "(No Subject)",
+        text: parsed.text,
+        timestamp: new Date().toISOString(),
       }],
     });
 
@@ -52,21 +53,28 @@ class ReceiveEmailAgent extends Agent<Env> {
 }`
   },
   {
-    title: "Route emails to agent instances",
+    title: "Route emails with routeAgentEmail",
     description:
-      "Use plus-addressing (user+id@domain) to route emails to specific agent instances. Configure Cloudflare Email Routing to forward to your Worker.",
-    code: `// In your Worker's email handler:
-export default {
-  async email(message, env) {
-    // Extract instance ID from the address
-    // receive+demo@example.com -> instance "demo"
-    const to = message.to;
-    const instanceId = to.split("+")[1]?.split("@")[0] || "default";
+      "Use routeAgentEmail in your Worker's email handler with createAddressBasedEmailResolver. Plus-addressing (user+id@domain) automatically maps to the right agent and instance — no manual parsing needed.",
+    code: `import { routeAgentEmail } from "agents";
+import { createAddressBasedEmailResolver } from "agents/email";
 
-    const agent = getAgentByName(env.ReceiveEmailAgent, instanceId);
-    await agent.onEmail(message.from, message.to, message.raw);
-  }
-}`
+export default {
+  async email(message: ForwardableEmailMessage, env: Env) {
+    // "receive+demo@example.com" routes to
+    // ReceiveEmailAgent with agentId "demo"
+    const resolver = createAddressBasedEmailResolver(
+      "ReceiveEmailAgent"
+    );
+
+    await routeAgentEmail(message, env, {
+      resolver,
+      onNoRoute: async (email) => {
+        console.warn("No route for:", email.to);
+      },
+    });
+  },
+};`
   }
 ];
 

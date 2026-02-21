@@ -36,50 +36,66 @@ type TabType = "inbox" | "outbox";
 
 const codeSections: CodeSection[] = [
   {
-    title: "Send signed email replies",
+    title: "Send signed replies with replyToEmail",
     description:
-      "When replying to an email, include HMAC-signed headers that identify the agent instance. When the recipient replies back, the signature is verified and the email routes to the correct agent.",
-    code: `class SecureEmailAgent extends Agent<Env> {
-  async onEmail(from: string, to: string, rawEmail: ReadableStream) {
-    // Parse the incoming email
-    const email = await new PostalMime().parse(rawEmail);
+      "Use the built-in replyToEmail method to send HMAC-signed replies. The SDK attaches X-Agent-Name, X-Agent-ID, X-Agent-Sig, and X-Agent-Sig-Ts headers automatically. When the recipient replies, the signature is verified and routed back to the same agent instance.",
+    code: `import { Agent } from "agents";
+import type { AgentEmail } from "agents/email";
+import { isAutoReplyEmail } from "agents/email";
+import PostalMime from "postal-mime";
 
-    // Check if this is a reply with a valid signature
-    if (email.headers["x-agent-sig"]) {
-      const isValid = await this.verifySignature(email.headers);
-      if (isValid) {
-        // This is a verified reply to our earlier message
-      }
+class SecureEmailAgent extends Agent<Env> {
+  async onEmail(email: AgentEmail) {
+    const raw = await email.getRaw();
+    const parsed = await PostalMime.parse(raw);
+
+    // email._secureRouted is true when the SDK
+    // verified the HMAC signature on the reply
+    if (email._secureRouted) {
+      console.log("Verified reply from:", email.from);
     }
 
-    // Send a signed reply
-    if (this.state.autoReplyEnabled) {
-      await this.sendSignedReply(from, email);
+    // Avoid infinite auto-reply loops
+    if (!isAutoReplyEmail(parsed.headers)) {
+      await this.replyToEmail(email, {
+        fromName: "Secure Agent",
+        body: "Thanks for your message!",
+        secret: this.env.EMAIL_SECRET,
+      });
     }
   }
 }`
   },
   {
-    title: "HMAC signature headers",
+    title: "Route with secure reply verification",
     description:
-      "The reply includes four custom headers: X-Agent-Name (agent type), X-Agent-ID (instance name), X-Agent-Sig (HMAC-SHA256), and X-Agent-Sig-Ts (timestamp). The secret comes from the EMAIL_SECRET environment variable.",
-    code: `  async sendSignedReply(to: string, original: Email) {
-    const timestamp = Date.now().toString();
-    const payload = \`\${this.name}:\${timestamp}\`;
-    const signature = await hmacSign(payload, this.env.EMAIL_SECRET);
+      "Combine createSecureReplyEmailResolver with createAddressBasedEmailResolver in routeAgentEmail. Secure replies are checked first — if the HMAC signature is valid, the email routes directly to the originating agent instance. Otherwise, address-based routing takes over.",
+    code: `import { routeAgentEmail } from "agents";
+import {
+  createSecureReplyEmailResolver,
+  createAddressBasedEmailResolver,
+} from "agents/email";
 
-    await sendEmail({
-      to,
-      subject: \`Re: \${original.subject}\`,
-      headers: {
-        "X-Agent-Name": "secure-email-agent",
-        "X-Agent-ID": this.name,
-        "X-Agent-Sig": signature,
-        "X-Agent-Sig-Ts": timestamp,
+export default {
+  async email(message: ForwardableEmailMessage, env: Env) {
+    const secureResolver = createSecureReplyEmailResolver(
+      env.EMAIL_SECRET
+    );
+    const addressResolver = createAddressBasedEmailResolver(
+      "SecureEmailAgent"
+    );
+
+    await routeAgentEmail(message, env, {
+      resolver: async (email, env) => {
+        // Signed replies get priority
+        const reply = await secureResolver(email, env);
+        if (reply) return reply;
+        // Fall back to address-based routing
+        return addressResolver(email, env);
       },
-      body: "Thanks for your message!",
     });
-  }`
+  },
+};`
   }
 ];
 
