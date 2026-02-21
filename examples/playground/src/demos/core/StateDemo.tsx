@@ -9,7 +9,7 @@ import {
   HighlightedJson,
   type CodeSection
 } from "../../components";
-import { useLogs, useUserId } from "../../hooks";
+import { useLogs, useUserId, useToast } from "../../hooks";
 import type { StateAgent, StateAgentState } from "./state-agent";
 
 const codeSections: CodeSection[] = [
@@ -74,6 +74,7 @@ agent.setState({ ...state, counter: 42 });`
 export function StateDemo() {
   const userId = useUserId();
   const { logs, addLog, clearLogs } = useLogs();
+  const { toast } = useToast();
   const [newItem, setNewItem] = useState("");
   const [customValue, setCustomValue] = useState("0");
   const [state, setState] = useState<StateAgentState>({
@@ -99,8 +100,10 @@ export function StateDemo() {
     try {
       const result = await agent.call("increment");
       addLog("in", "result", result);
+      toast("Counter: " + (result as StateAgentState).counter, "success");
     } catch (e) {
       addLog("error", "error", e instanceof Error ? e.message : String(e));
+      toast(e instanceof Error ? e.message : String(e), "error");
     }
   };
 
@@ -109,8 +112,10 @@ export function StateDemo() {
     try {
       const result = await agent.call("decrement");
       addLog("in", "result", result);
+      toast("Counter: " + (result as StateAgentState).counter, "success");
     } catch (e) {
       addLog("error", "error", e instanceof Error ? e.message : String(e));
+      toast(e instanceof Error ? e.message : String(e), "error");
     }
   };
 
@@ -122,6 +127,7 @@ export function StateDemo() {
       addLog("in", "result", result);
     } catch (e) {
       addLog("error", "error", e instanceof Error ? e.message : String(e));
+      toast(e instanceof Error ? e.message : String(e), "error");
     }
   };
 
@@ -134,6 +140,7 @@ export function StateDemo() {
       setNewItem("");
     } catch (e) {
       addLog("error", "error", e instanceof Error ? e.message : String(e));
+      toast(e instanceof Error ? e.message : String(e), "error");
     }
   };
 
@@ -144,6 +151,7 @@ export function StateDemo() {
       addLog("in", "result", result);
     } catch (e) {
       addLog("error", "error", e instanceof Error ? e.message : String(e));
+      toast(e instanceof Error ? e.message : String(e), "error");
     }
   };
 
@@ -154,6 +162,7 @@ export function StateDemo() {
       addLog("in", "result", result);
     } catch (e) {
       addLog("error", "error", e instanceof Error ? e.message : String(e));
+      toast(e instanceof Error ? e.message : String(e), "error");
     }
   };
 
@@ -210,21 +219,29 @@ export function StateDemo() {
                 +1
               </Button>
             </div>
+            <Input
+              aria-label="Custom counter value"
+              type="number"
+              value={customValue}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                setCustomValue(e.target.value)
+              }
+              className="w-full mb-2"
+              placeholder="Custom value"
+            />
             <div className="flex gap-2">
-              <Input
-                aria-label="Custom counter value"
-                type="number"
-                value={customValue}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                  setCustomValue(e.target.value)
-                }
+              <Button
+                variant="secondary"
+                onClick={handleSetCounter}
                 className="flex-1"
-                placeholder="Custom value"
-              />
-              <Button variant="secondary" onClick={handleSetCounter}>
+              >
                 Set (Server)
               </Button>
-              <Button variant="secondary" onClick={handleClientSetState}>
+              <Button
+                variant="secondary"
+                onClick={handleClientSetState}
+                className="flex-1"
+              >
                 Set (Client)
               </Button>
             </div>

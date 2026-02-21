@@ -7,7 +7,7 @@ import {
   HighlightedJson,
   type CodeSection
 } from "../../components";
-import { useLogs } from "../../hooks";
+import { useLogs, useToast } from "../../hooks";
 
 const codeSections: CodeSection[] = [
   {
@@ -153,6 +153,7 @@ async function ensureSession(
 
 export function McpServerDemo() {
   const { logs, addLog, clearLogs } = useLogs();
+  const { toast } = useToast();
   const [selectedTool, setSelectedTool] = useState(0);
   const [argsText, setArgsText] = useState(
     JSON.stringify(TOOLS[0].defaultArgs, null, 2)
@@ -198,8 +199,10 @@ export function McpServerDemo() {
       );
       addLog("in", "result", data);
       setResult(data);
+      toast(tool.name + " called", "success");
     } catch (e) {
       addLog("error", "error", e instanceof Error ? e.message : String(e));
+      toast(e instanceof Error ? e.message : String(e), "error");
       setSessionId(null);
     } finally {
       setIsRunning(false);

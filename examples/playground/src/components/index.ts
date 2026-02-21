@@ -7,3 +7,4 @@ export {
   HighlightedJson,
   type CodeSection
 } from "./CodeExplanation";
+export { Toaster } from "./Toaster";

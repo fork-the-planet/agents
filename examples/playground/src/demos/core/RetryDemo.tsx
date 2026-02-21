@@ -8,7 +8,7 @@ import {
   CodeExplanation,
   type CodeSection
 } from "../../components";
-import { useLogs, useUserId } from "../../hooks";
+import { useLogs, useUserId, useToast } from "../../hooks";
 import type { RetryAgent, RetryAgentState } from "./retry-agent";
 
 const codeSections: CodeSection[] = [
@@ -81,6 +81,7 @@ class RetryAgent extends Agent<Env> {
 export function RetryDemo() {
   const userId = useUserId();
   const { logs, addLog, clearLogs } = useLogs();
+  const { toast } = useToast();
   const [succeedOn, setSucceedOn] = useState("3");
   const [failCount, setFailCount] = useState("2");
   const [permanent, setPermanent] = useState(false);
@@ -118,8 +119,10 @@ export function RetryDemo() {
     try {
       const result = await agent.call("retryFlaky", [Number(succeedOn)]);
       addLog("in", "result", result);
+      toast(String(result), "success");
     } catch (e) {
       addLog("error", "error", e instanceof Error ? e.message : String(e));
+      toast(e instanceof Error ? e.message : String(e), "error");
     }
   };
 
@@ -134,8 +137,10 @@ export function RetryDemo() {
         permanent
       ]);
       addLog("in", "result", result);
+      toast(String(result), "success");
     } catch (e) {
       addLog("error", "error", e instanceof Error ? e.message : String(e));
+      toast(e instanceof Error ? e.message : String(e), "error");
     }
   };
 

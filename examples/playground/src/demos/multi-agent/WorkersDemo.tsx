@@ -8,7 +8,7 @@ import {
   CodeExplanation,
   type CodeSection
 } from "../../components";
-import { useLogs, useUserId } from "../../hooks";
+import { useLogs, useUserId, useToast } from "../../hooks";
 import type { ManagerAgent, ManagerState } from "./manager-agent";
 import type { WorkerResult } from "./fanout-worker-agent";
 
@@ -66,6 +66,7 @@ const PRESETS = [
 export function WorkersDemo() {
   const userId = useUserId();
   const { logs, addLog, clearLogs } = useLogs();
+  const { toast } = useToast();
   const [items, setItems] = useState(PRESETS[0]);
   const [workerCount, setWorkerCount] = useState("3");
   const [isProcessing, setIsProcessing] = useState(false);
@@ -105,6 +106,15 @@ export function WorkersDemo() {
         totalMs: (result as ManagerState["lastRun"])?.totalDuration
       });
       setLastRun(result as ManagerState["lastRun"]);
+      const run = result as ManagerState["lastRun"];
+      toast(
+        "Processed by " +
+          run?.workerCount +
+          " workers in " +
+          run?.totalDuration +
+          "ms",
+        "success"
+      );
     } catch (e) {
       addLog("error", "error", e instanceof Error ? e.message : String(e));
     } finally {

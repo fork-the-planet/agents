@@ -16,7 +16,7 @@ import {
   HighlightedJson,
   type CodeSection
 } from "../../components";
-import { useLogs, useUserId } from "../../hooks";
+import { useLogs, useUserId, useToast } from "../../hooks";
 import type { SqlAgent } from "./sql-agent";
 
 const codeSections: CodeSection[] = [
@@ -69,6 +69,7 @@ class SqlAgent extends Agent<Env> {
 export function SqlDemo() {
   const userId = useUserId();
   const { logs, addLog, clearLogs } = useLogs();
+  const { toast } = useToast();
   const [tables, setTables] = useState<Array<{ name: string; type: string }>>(
     []
   );
@@ -142,6 +143,7 @@ export function SqlDemo() {
       const result = (await agent.call("executeQuery", [query])) as unknown[];
       addLog("in", "query_result", `${result.length} rows`);
       setQueryResult(result);
+      toast(result.length + " rows returned", "success");
     } catch (e) {
       addLog("error", "error", e instanceof Error ? e.message : String(e));
     }
@@ -153,6 +155,7 @@ export function SqlDemo() {
     try {
       await agent.call("insertRecord", [newKey, newValue]);
       addLog("in", "inserted");
+      toast("Record inserted", "success");
       setNewKey("");
       setNewValue("");
       loadRecords();

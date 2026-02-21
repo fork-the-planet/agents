@@ -9,7 +9,7 @@ import {
   HighlightedJson,
   type CodeSection
 } from "../../components";
-import { useLogs, useUserId } from "../../hooks";
+import { useLogs, useUserId, useToast } from "../../hooks";
 import type { McpClientAgent, McpClientState } from "./mcp-client-agent";
 
 const codeSections: CodeSection[] = [
@@ -57,6 +57,7 @@ interface ToolInfo {
 export function McpClientDemo() {
   const userId = useUserId();
   const { logs, addLog, clearLogs } = useLogs();
+  const { toast } = useToast();
   const [mcpUrl, setMcpUrl] = useState(`${window.location.origin}/mcp-server`);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
@@ -103,6 +104,7 @@ export function McpClientDemo() {
       const result = await agent.call("connectToServer", [mcpUrl]);
       addLog("in", "connected", result);
       setIsConnected(true);
+      toast("Connected to MCP server", "success");
     } catch (e) {
       addLog("error", "error", e instanceof Error ? e.message : String(e));
     } finally {
@@ -120,6 +122,7 @@ export function McpClientDemo() {
       setSelectedTool(null);
       setToolResult(null);
       addLog("in", "disconnected");
+      toast("Disconnected", "info");
     } catch (e) {
       addLog("error", "error", e instanceof Error ? e.message : String(e));
     }
@@ -150,6 +153,7 @@ export function McpClientDemo() {
       ]);
       addLog("in", "tool_result", result);
       setToolResult(result);
+      toast(selectedTool + " called", "success");
     } catch (e) {
       addLog("error", "error", e instanceof Error ? e.message : String(e));
     } finally {

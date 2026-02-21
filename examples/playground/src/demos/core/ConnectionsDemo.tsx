@@ -8,7 +8,7 @@ import {
   CodeExplanation,
   type CodeSection
 } from "../../components";
-import { useLogs, useUserId } from "../../hooks";
+import { useLogs, useUserId, useToast } from "../../hooks";
 import type {
   ConnectionsAgent,
   ConnectionsAgentState
@@ -69,6 +69,7 @@ class ConnectionsAgent extends Agent<Env> {
 export function ConnectionsDemo() {
   const userId = useUserId();
   const { logs, addLog, clearLogs } = useLogs();
+  const { toast } = useToast();
   const [connectionCount, setConnectionCount] = useState(0);
   const [broadcastMessage, setBroadcastMessage] = useState(
     "Hello from the playground!"
@@ -122,6 +123,7 @@ export function ConnectionsDemo() {
     try {
       await agent.call("broadcastMessage", [broadcastMessage]);
       addLog("in", "broadcast_sent");
+      toast("Broadcast sent", "info");
     } catch (e) {
       addLog("error", "error", e instanceof Error ? e.message : String(e));
     }

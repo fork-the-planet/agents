@@ -10,7 +10,7 @@ import {
   HighlightedJson,
   type CodeSection
 } from "../../components";
-import { useLogs, useUserId } from "../../hooks";
+import { useLogs, useUserId, useToast } from "../../hooks";
 import type { StreamingAgent } from "./streaming-agent";
 
 const codeSections: CodeSection[] = [
@@ -54,6 +54,7 @@ class StreamingAgent extends Agent<Env> {
 export function StreamingDemo() {
   const userId = useUserId();
   const { logs, addLog, clearLogs } = useLogs();
+  const { toast } = useToast();
   const [chunks, setChunks] = useState<unknown[]>([]);
   const [finalResult, setFinalResult] = useState<unknown>(null);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -91,15 +92,18 @@ export function StreamingDemo() {
           addLog("in", "stream_done", final);
           setFinalResult(final);
           setIsStreaming(false);
+          toast("Stream complete — " + chunks.length + " chunks", "success");
         },
         onError: (error: string) => {
           addLog("error", "stream_error", error);
           setIsStreaming(false);
+          toast("Stream error", "error");
         }
       });
     } catch (e) {
       addLog("error", "error", e instanceof Error ? e.message : String(e));
       setIsStreaming(false);
+      toast(e instanceof Error ? e.message : String(e), "error");
     }
   };
 

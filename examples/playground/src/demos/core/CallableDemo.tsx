@@ -9,7 +9,7 @@ import {
   HighlightedCode,
   type CodeSection
 } from "../../components";
-import { useLogs, useUserId } from "../../hooks";
+import { useLogs, useUserId, useToast } from "../../hooks";
 import type { CallableAgent } from "./callable-agent";
 
 const codeSections: CodeSection[] = [
@@ -75,6 +75,7 @@ try {
 export function CallableDemo() {
   const userId = useUserId();
   const { logs, addLog, clearLogs } = useLogs();
+  const { toast } = useToast();
   const [methods, setMethods] = useState<
     Array<{ name: string; description?: string }>
   >([]);
@@ -102,11 +103,13 @@ export function CallableDemo() {
       )(method, args);
       addLog("in", "result", result);
       setLastResult(JSON.stringify(result, null, 2));
+      toast(method + "() → " + JSON.stringify(result).slice(0, 60), "success");
       return result;
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e);
       addLog("error", "error", error);
       setLastResult(`Error: ${error}`);
+      toast(error, "error");
       throw e;
     }
   };

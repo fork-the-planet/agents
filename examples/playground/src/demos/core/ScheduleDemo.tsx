@@ -9,7 +9,7 @@ import {
   CodeExplanation,
   type CodeSection
 } from "../../components";
-import { useLogs, useUserId } from "../../hooks";
+import { useLogs, useUserId, useToast } from "../../hooks";
 import type { ScheduleAgent, ScheduleAgentState } from "./schedule-agent";
 
 const codeSections: CodeSection[] = [
@@ -91,6 +91,7 @@ await agent.call("cancelTask", [id]);`
 export function ScheduleDemo() {
   const userId = useUserId();
   const { logs, addLog, clearLogs } = useLogs();
+  const { toast } = useToast();
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [delaySeconds, setDelaySeconds] = useState("5");
   const [message, setMessage] = useState("Hello from schedule!");
@@ -111,6 +112,7 @@ export function ScheduleDemo() {
         const data = JSON.parse(message.data as string);
         if (data.type === "schedule_executed") {
           addLog("in", "schedule_executed", data.payload);
+          toast("Schedule fired!", "success");
           refreshSchedules();
         } else if (data.type === "recurring_executed") {
           addLog("in", "recurring_executed", data.payload);
@@ -147,6 +149,7 @@ export function ScheduleDemo() {
         message
       ]);
       addLog("in", "scheduled", { id });
+      toast("Task scheduled — fires in " + delaySeconds + "s", "info");
       refreshSchedules();
     } catch (e) {
       addLog("error", "error", e instanceof Error ? e.message : String(e));
@@ -164,6 +167,7 @@ export function ScheduleDemo() {
         intervalLabel
       ]);
       addLog("in", "scheduled", { id });
+      toast("Recurring task started — every " + intervalSeconds + "s", "info");
       refreshSchedules();
     } catch (e) {
       addLog("error", "error", e instanceof Error ? e.message : String(e));
