@@ -1,4 +1,4 @@
-import { tool, type Tool } from "ai";
+import { tool, type Tool, asSchema } from "ai";
 import { z } from "zod";
 import type { ToolSet } from "ai";
 import * as acorn from "acorn";
@@ -98,7 +98,9 @@ export function createCodeTool(
     description,
     inputSchema: codeSchema,
     execute: async ({ code }) => {
-      // Extract execute functions from tools, keyed by name
+      // Extract execute functions from tools, keyed by name.
+      // Wrap each with its schema so arguments from the sandbox
+      // are validated before reaching the tool function.
       const fns: Record<string, (...args: unknown[]) => Promise<unknown>> = {};
 
       for (const [name, t] of Object.entries(tools)) {
@@ -107,7 +109,25 @@ export function createCodeTool(
             ? (t.execute as (args: unknown) => Promise<unknown>)
             : undefined;
         if (execute) {
-          fns[sanitizeToolName(name)] = execute;
+          const rawSchema =
+            "inputSchema" in t
+              ? t.inputSchema
+              : "parameters" in t
+                ? (t as Record<string, unknown>).parameters
+                : undefined;
+
+          // Use AI SDK's asSchema() to normalize any schema type
+          // (Zod v3/v4, Standard Schema, JSON Schema) into a unified
+          // Schema with an optional .validate() method.
+          const schema = rawSchema != null ? asSchema(rawSchema) : undefined;
+
+          fns[sanitizeToolName(name)] = schema?.validate
+            ? async (args: unknown) => {
+                const result = await schema.validate!(args);
+                if (!result.success) throw result.error;
+                return execute(result.value);
+              }
+            : execute;
         }
       }
 
