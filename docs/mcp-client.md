@@ -489,13 +489,13 @@ export class MyAgent extends Agent {
 ### addMcpServer()
 
 ```typescript
-// Preferred signature
+// HTTP transport (Streamable HTTP, SSE)
 async addMcpServer(
   name: string,
   url: string,
   options?: {
-    callbackHost?: string;
-    callbackPath?: string; // custom callback URL path (bypasses default /agents/{class}/{name}/callback)
+    callbackHost?: string;  // only needed for OAuth-authenticated servers
+    callbackPath?: string;  // custom callback URL path (bypasses default /agents/{class}/{name}/callback)
     agentsPrefix?: string;
     client?: ClientOptions;
     transport?: {
@@ -509,6 +509,17 @@ async addMcpServer(
   | { id: string; state: "authenticating"; authUrl: string }
 >
 
+// RPC transport (Durable Object binding — no HTTP overhead)
+async addMcpServer(
+  name: string,
+  binding: DurableObjectNamespace,
+  options?: {
+    props?: Record<string, unknown>; // passed to the McpAgent's onStart(props)
+    client?: ClientOptions;
+    retry?: RetryOptions;
+  }
+): Promise<{ id: string; state: "ready" }>
+
 // Legacy signature (still supported)
 async addMcpServer(
   name: string,
@@ -520,6 +531,10 @@ async addMcpServer(
 ```
 
 Add and connect to an MCP server. Throws if connection or discovery fails.
+
+For non-OAuth servers, `callbackHost` is not required — you can call `addMcpServer("name", url)` with no options. For RPC transport, pass a `DurableObjectNamespace` binding instead of a URL. See [MCP Transports](./mcp-transports.md) for details.
+
+If `addMcpServer` is called with a `name` that already has an active connection, the existing connection is returned instead of creating a duplicate.
 
 ### removeMcpServer()
 
