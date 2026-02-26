@@ -114,6 +114,18 @@
       {
         "class_name": "TestFiberAgent",
         "name": "TestFiberAgent"
+      },
+      {
+        "class_name": "TestSessionAgent",
+        "name": "TestSessionAgent"
+      },
+      {
+        "class_name": "TestSessionAgentNoMicroCompaction",
+        "name": "TestSessionAgentNoMicroCompaction"
+      },
+      {
+        "class_name": "TestSessionAgentCustomRules",
+        "name": "TestSessionAgentCustomRules"
       }
     ]
   },
@@ -179,7 +191,10 @@
         "TestQueueAgent",
         "TestRetryAgent",
         "TestRetryDefaultsAgent",
-        "TestFiberAgent"
+        "TestFiberAgent",
+        "TestSessionAgent",
+        "TestSessionAgentNoMicroCompaction",
+        "TestSessionAgentCustomRules"
       ],
       "tag": "v1"
     }

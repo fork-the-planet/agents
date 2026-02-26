@@ -28,3 +28,8 @@ export { TestQueueAgent } from "./queue";
 export { TestRaceAgent } from "./race";
 export { TestRetryAgent, TestRetryDefaultsAgent } from "./retry";
 export { TestFiberAgent } from "./fiber";
+export {
+  TestSessionAgent,
+  TestSessionAgentNoMicroCompaction,
+  TestSessionAgentCustomRules
+} from "./session";
