@@ -90,6 +90,13 @@ class TestMCPClientManager extends MCPClientManager {
   fireObservabilityEvent(event: MCPObservabilityEvent) {
     this._onObservabilityEvent.fire(event);
   }
+
+  trackConnection(serverId: string, promise: Promise<void>): void {
+    type HasTrackConnection = {
+      _trackConnection: (id: string, p: Promise<void>) => void;
+    };
+    (this as unknown as HasTrackConnection)._trackConnection(serverId, promise);
+  }
 }
 
 describe("MCPClientManager OAuth Integration", () => {
@@ -1717,6 +1724,46 @@ describe("MCPClientManager OAuth Integration", () => {
       expect(onStateChangedSpy).toHaveBeenCalledTimes(3);
     });
 
+    it("should self-track so waitForConnections() includes it", async () => {
+      const id = "self-track-server";
+
+      await manager.registerServer(id, {
+        url: "http://example.com/mcp",
+        name: "Test Server",
+        callbackUrl: "http://localhost:3000/callback",
+        client: {},
+        transport: { type: "auto" }
+      });
+
+      let resolveInit!: () => void;
+      const conn = manager.mcpConnections[id];
+      conn.init = vi.fn().mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveInit = resolve;
+          })
+      );
+
+      // Fire-and-forget (don't await)
+      const connectionPromise = manager.establishConnection(id);
+
+      // waitForConnections should block because establishConnection tracked itself
+      let waited = false;
+      const waitPromise = manager.waitForConnections().then(() => {
+        waited = true;
+      });
+
+      expect(waited).toBe(false);
+
+      // Let init complete (with failed state so discover is skipped)
+      conn.connectionState = "failed";
+      resolveInit();
+
+      await connectionPromise;
+      await waitPromise;
+      expect(waited).toBe(true);
+    });
+
     it("should fire onServerStateChanged when removing a server", async () => {
       const id = "remove-server";
       const onStateChangedSpy = vi.fn();
@@ -3010,6 +3057,249 @@ describe("MCPClientManager OAuth Integration", () => {
           name: "public-ip"
         })
       ).resolves.toBe("s11");
+    });
+  });
+
+  describe("waitForConnections()", () => {
+    it("should resolve immediately when no pending connections", async () => {
+      await manager.waitForConnections();
+      // Should not hang or throw
+    });
+
+    it("should wait for tracked connections to settle", async () => {
+      let resolveConnection!: () => void;
+      const connectionPromise = new Promise<void>((resolve) => {
+        resolveConnection = resolve;
+      });
+
+      manager.trackConnection("server1", connectionPromise);
+
+      let waited = false;
+      const waitPromise = manager.waitForConnections().then(() => {
+        waited = true;
+      });
+
+      // Should not have resolved yet
+      expect(waited).toBe(false);
+
+      // Resolve the connection
+      resolveConnection();
+      await waitPromise;
+
+      expect(waited).toBe(true);
+    });
+
+    it("should handle mixed success and failure", async () => {
+      let resolveSuccess!: () => void;
+      let rejectFailure!: (err: Error) => void;
+
+      const successPromise = new Promise<void>((resolve) => {
+        resolveSuccess = resolve;
+      });
+      const failurePromise = new Promise<void>((_resolve, reject) => {
+        rejectFailure = reject;
+      });
+
+      manager.trackConnection("server-ok", successPromise);
+      manager.trackConnection("server-fail", failurePromise);
+
+      resolveSuccess();
+      rejectFailure(new Error("connection failed"));
+
+      // waitForConnections uses Promise.allSettled, so it should not reject
+      await manager.waitForConnections();
+    });
+
+    it("should clean up settled promises from the map", async () => {
+      let resolveConnection!: () => void;
+      const connectionPromise = new Promise<void>((resolve) => {
+        resolveConnection = resolve;
+      });
+
+      manager.trackConnection("server1", connectionPromise);
+      resolveConnection();
+
+      await manager.waitForConnections();
+
+      // A second call should resolve immediately (no stale entries)
+      await manager.waitForConnections();
+    });
+
+    it("should respect timeout and return early", async () => {
+      // Create a promise that never resolves
+      const neverResolves = new Promise<void>(() => {});
+      manager.trackConnection("slow-server", neverResolves);
+
+      const start = Date.now();
+      await manager.waitForConnections({ timeout: 100 });
+      const elapsed = Date.now() - start;
+
+      // Should have returned after ~100ms, not hung forever
+      expect(elapsed).toBeGreaterThanOrEqual(80);
+      expect(elapsed).toBeLessThan(2000);
+    });
+
+    it("should return immediately with timeout: 0", async () => {
+      const neverResolves = new Promise<void>(() => {});
+      manager.trackConnection("blocked-server", neverResolves);
+
+      const start = Date.now();
+      await manager.waitForConnections({ timeout: 0 });
+      const elapsed = Date.now() - start;
+
+      // Should return instantly, not block
+      expect(elapsed).toBeLessThan(50);
+    });
+
+    it("should return immediately with negative timeout", async () => {
+      const neverResolves = new Promise<void>(() => {});
+      manager.trackConnection("blocked-server", neverResolves);
+
+      const start = Date.now();
+      await manager.waitForConnections({ timeout: -1 });
+      const elapsed = Date.now() - start;
+
+      expect(elapsed).toBeLessThan(50);
+    });
+
+    it("should resolve before timeout if connections finish early", async () => {
+      let resolveConnection!: () => void;
+      const connectionPromise = new Promise<void>((resolve) => {
+        resolveConnection = resolve;
+      });
+
+      manager.trackConnection("fast-server", connectionPromise);
+
+      // Resolve after 50ms
+      setTimeout(() => resolveConnection(), 50);
+
+      const start = Date.now();
+      await manager.waitForConnections({ timeout: 5000 });
+      const elapsed = Date.now() - start;
+
+      // Should have resolved in ~50ms, not waited the full 5s
+      expect(elapsed).toBeLessThan(1000);
+    });
+
+    it("should handle multiple concurrent callers", async () => {
+      let resolveConnection!: () => void;
+      const connectionPromise = new Promise<void>((resolve) => {
+        resolveConnection = resolve;
+      });
+
+      manager.trackConnection("server1", connectionPromise);
+
+      // Two concurrent callers
+      let waited1 = false;
+      let waited2 = false;
+      const wait1 = manager.waitForConnections().then(() => {
+        waited1 = true;
+      });
+      const wait2 = manager.waitForConnections().then(() => {
+        waited2 = true;
+      });
+
+      // Neither should have resolved yet
+      await new Promise((r) => setTimeout(r, 10));
+      expect(waited1).toBe(false);
+      expect(waited2).toBe(false);
+
+      // Resolve the connection — both callers should unblock
+      resolveConnection();
+      await Promise.all([wait1, wait2]);
+
+      expect(waited1).toBe(true);
+      expect(waited2).toBe(true);
+    });
+
+    it("should not delete a replaced promise when the old one settles", async () => {
+      let resolveOld!: () => void;
+      const oldPromise = new Promise<void>((resolve) => {
+        resolveOld = resolve;
+      });
+
+      let resolveNew!: () => void;
+      const newPromise = new Promise<void>((resolve) => {
+        resolveNew = resolve;
+      });
+
+      // Track old, then replace with new
+      manager.trackConnection("server1", oldPromise);
+      manager.trackConnection("server1", newPromise);
+
+      // Old promise settles — should NOT remove the newer tracked promise
+      resolveOld();
+      await new Promise((r) => setTimeout(r, 10));
+
+      // waitForConnections should still wait for newPromise
+      let waited = false;
+      const waitPromise = manager.waitForConnections().then(() => {
+        waited = true;
+      });
+
+      // Should not have resolved yet (new promise is still pending)
+      await new Promise((r) => setTimeout(r, 10));
+      expect(waited).toBe(false);
+
+      // Resolve the new promise
+      resolveNew();
+      await waitPromise;
+      expect(waited).toBe(true);
+    });
+  });
+
+  describe("restoreConnectionsFromStorage() + waitForConnections() integration", () => {
+    it("should allow waiting for restore-initiated connections", async () => {
+      // Set up a stored server that will be restored
+      const serverId = "restore-wait-test";
+      mockStorageData.set(serverId, {
+        id: serverId,
+        name: "Test Server",
+        server_url: "http://test.example.com",
+        callback_url: "http://localhost:3000/callback",
+        client_id: null,
+        auth_url: null,
+        server_options: null
+      });
+
+      // Restore — this fires _restoreServer in the background via _trackConnection
+      await manager.restoreConnectionsFromStorage("test-agent");
+
+      // waitForConnections should resolve (the restore attempt will fail since
+      // there's no real server, but _trackConnection captures the promise
+      // and waitForConnections uses allSettled which handles rejections)
+      await manager.waitForConnections({ timeout: 5000 });
+
+      // After waiting, the connection should be in a terminal state (failed or connecting)
+      // rather than still pending
+      const conn = manager.mcpConnections[serverId];
+      expect(conn).toBeDefined();
+    });
+
+    it("should resolve immediately for servers that skip restore (authenticating)", async () => {
+      const serverId = "auth-skip-test";
+      mockStorageData.set(serverId, {
+        id: serverId,
+        name: "OAuth Server",
+        server_url: "http://oauth.example.com",
+        callback_url: "http://localhost:3000/callback",
+        client_id: "client-123",
+        auth_url: "https://auth.example.com/authorize",
+        server_options: null
+      });
+
+      await manager.restoreConnectionsFromStorage("test-agent");
+
+      // Should resolve immediately — auth_url servers are set to authenticating
+      // and are NOT tracked as pending connections
+      const start = Date.now();
+      await manager.waitForConnections();
+      const elapsed = Date.now() - start;
+
+      expect(elapsed).toBeLessThan(100);
+      expect(manager.mcpConnections[serverId].connectionState).toBe(
+        "authenticating"
+      );
     });
   });
 });

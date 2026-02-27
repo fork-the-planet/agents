@@ -192,6 +192,7 @@ export class MCPClientManager {
     callbackUrl: string
   ) => AgentMcpOAuthProvider;
   private _isRestored = false;
+  private _pendingConnections = new Map<string, Promise<void>>();
 
   /** @internal Protected for testing purposes. */
   protected readonly _onObservabilityEvent =
@@ -454,10 +455,59 @@ export class MCPClientManager {
       }
 
       // Start connection in background (don't await) to avoid blocking the DO
-      this._restoreServer(server.id, parsedOptions?.retry);
+      this._trackConnection(
+        server.id,
+        this._restoreServer(server.id, parsedOptions?.retry)
+      );
     }
 
     this._isRestored = true;
+  }
+
+  /**
+   * Track a pending connection promise for a server.
+   * The promise is removed from the map when it settles.
+   */
+  private _trackConnection(serverId: string, promise: Promise<void>): void {
+    const tracked = promise.finally(() => {
+      // Only delete if it's still the same promise (not replaced by a newer one)
+      if (this._pendingConnections.get(serverId) === tracked) {
+        this._pendingConnections.delete(serverId);
+      }
+    });
+    this._pendingConnections.set(serverId, tracked);
+  }
+
+  /**
+   * Wait for all in-flight connection and discovery operations to settle.
+   * This is useful when you need MCP tools to be available before proceeding,
+   * e.g. before calling getAITools() after the agent wakes from hibernation.
+   *
+   * Returns once every pending connection has either connected and discovered,
+   * failed, or timed out. Never rejects.
+   *
+   * @param options.timeout - Maximum time in milliseconds to wait.
+   *   `0` returns immediately without waiting.
+   *   `undefined` (default) waits indefinitely.
+   */
+  async waitForConnections(options?: { timeout?: number }): Promise<void> {
+    if (this._pendingConnections.size === 0) {
+      return;
+    }
+    if (options?.timeout != null && options.timeout <= 0) {
+      return;
+    }
+    const settled = Promise.allSettled(this._pendingConnections.values());
+    if (options?.timeout != null && options.timeout > 0) {
+      let timerId: ReturnType<typeof setTimeout>;
+      const timer = new Promise<void>((resolve) => {
+        timerId = setTimeout(resolve, options.timeout);
+      });
+      await Promise.race([settled, timer]);
+      clearTimeout(timerId!);
+    } else {
+      await settled;
+    }
   }
 
   /**
@@ -1024,11 +1074,19 @@ export class MCPClientManager {
   }
 
   /**
-   * Establish connection in the background after OAuth completion
-   * This method connects to the server and discovers its capabilities
+   * Establish connection in the background after OAuth completion.
+   * This method connects to the server and discovers its capabilities.
+   * The connection is automatically tracked so that `waitForConnections()`
+   * will include it.
    * @param serverId The server ID to establish connection for
    */
   async establishConnection(serverId: string): Promise<void> {
+    const promise = this._doEstablishConnection(serverId);
+    this._trackConnection(serverId, promise);
+    return promise;
+  }
+
+  private async _doEstablishConnection(serverId: string): Promise<void> {
     const conn = this.mcpConnections[serverId];
     if (!conn) {
       this._onObservabilityEvent.fire({
@@ -1221,6 +1279,9 @@ export class MCPClientManager {
   async closeAllConnections() {
     const ids = Object.keys(this.mcpConnections);
 
+    // Clear all pending connection tracking
+    this._pendingConnections.clear();
+
     // Cancel all in-flight discoveries
     for (const id of ids) {
       this.mcpConnections[id].cancelDiscovery();
@@ -1251,6 +1312,9 @@ export class MCPClientManager {
 
     // Cancel any in-flight discovery
     this.mcpConnections[id].cancelDiscovery();
+
+    // Remove from pending so waitForConnections() doesn't block on a closed server
+    this._pendingConnections.delete(id);
 
     await this.mcpConnections[id].client.close();
     delete this.mcpConnections[id];
