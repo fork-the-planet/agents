@@ -1,0 +1,30 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "auth-agent",
+  "compatibility_date": "2026-01-28",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "not_found_handling": "single-page-application",
+    // Token endpoint and agent routes are handled by the Worker
+    "run_worker_first": ["/api/*", "/agents/*"]
+  },
+  "ai": {
+    "binding": "AI",
+    "remote": true
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "ChatAgent",
+        "name": "ChatAgent"
+      }
+    ]
+  },
+  "main": "src/server.ts",
+  "migrations": [
+    {
+      "new_sqlite_classes": ["ChatAgent"],
+      "tag": "v1"
+    }
+  ]
+}
