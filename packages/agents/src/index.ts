@@ -2526,6 +2526,8 @@ export class Agent<
     if (result.length > 0 && "time" in result[0]) {
       const nextTime = (result[0].time as number) * 1000;
       await this.ctx.storage.setAlarm(nextTime);
+    } else {
+      await this.ctx.storage.deleteAlarm();
     }
   }
 
