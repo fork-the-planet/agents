@@ -1,0 +1,2082 @@
+import { channel } from "node:diagnostics_channel";
+import { Bash, defineCommand } from "just-bash";
+import type {
+  Command,
+  CommandContext,
+  ExecResult,
+  CustomCommand
+} from "just-bash";
+import type { NetworkConfig } from "just-bash";
+
+export { defineCommand };
+export type { Command, CommandContext, ExecResult, NetworkConfig };
+
+/**
+ * Workspace — durable file storage for any Agent.
+ *
+ * Hybrid storage:
+ *   - Files < threshold: stored inline in SQLite (fast, no external calls)
+ *   - Files ≥ threshold: metadata in SQLite, content in R2 (avoids row limit)
+ *
+ * Usage:
+ *   ```ts
+ *   import { Agent } from "agents";
+ *   import { Workspace } from "agents/experimental/workspace";
+ *
+ *   class MyAgent extends Agent<Env> {
+ *     workspace = new Workspace(this, {
+ *       r2: this.env.WORKSPACE_FILES,
+ *       // r2Prefix defaults to this.name (the Durable Object ID)
+ *     });
+ *
+ *     async onMessage(conn, msg) {
+ *       await this.workspace.writeFile("/hello.txt", "world");
+ *       const content = await this.workspace.readFile("/hello.txt");
+ *     }
+ *   }
+ *   ```
+ *
+ * R2 is optional — if the configured binding isn't present, all files are
+ * stored inline regardless of size (with a warning for large files).
+ *
+ * @module agents/workspace
+ */
+
+// ── Host interface ───────────────────────────────────────────────────
+//
+// Only requires `sql` which is public on Agent (via partyserver's Server).
+// We store the host reference so that `host.sql` calls preserve the
+// correct `this` binding (sql is a method, not a standalone function).
+
+export interface WorkspaceHost {
+  sql: <T = Record<string, string | number | boolean | null>>(
+    strings: TemplateStringsArray,
+    ...values: (string | number | boolean | null)[]
+  ) => T[];
+  /** Durable Object ID / name — used as the default R2 key prefix when r2Prefix is not set. Read lazily (not at construction time). */
+  name?: string;
+}
+
+// ── Options ──────────────────────────────────────────────────────────
+
+export interface WorkspaceOptions {
+  /** Namespace to isolate this workspace's tables (default: "default"). */
+  namespace?: string;
+  /** R2 bucket for large-file storage (optional). */
+  r2?: R2Bucket;
+  /** Prefix for R2 object keys. Defaults to `host.name` (the Durable Object ID) when omitted. */
+  r2Prefix?: string;
+  /** Byte threshold for spilling files to R2 (default: 1_500_000 = 1.5 MB). */
+  inlineThreshold?: number;
+  /** Bash execution limits (requires just-bash). */
+  bashLimits?: {
+    maxCommandCount?: number;
+    maxLoopIterations?: number;
+    maxCallDepth?: number;
+  };
+  /** Custom commands available in every bash() call. */
+  commands?: CustomCommand[];
+  /** Environment variables available in every bash() call. */
+  env?: Record<string, string>;
+  /** Network configuration for curl (URL allow-list, methods, timeouts). */
+  network?: NetworkConfig;
+  /** Called when files/directories change. Wire to agent.broadcast() for real-time sync. */
+  onChange?: (event: WorkspaceChangeEvent) => void;
+}
+
+// ── Public types ─────────────────────────────────────────────────────
+
+export type EntryType = "file" | "directory" | "symlink";
+
+export type FileInfo = {
+  path: string;
+  name: string;
+  type: EntryType;
+  mimeType: string;
+  size: number;
+  createdAt: number;
+  updatedAt: number;
+  target?: string;
+};
+
+export type FileStat = FileInfo;
+
+export type BashResult = {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+};
+
+export interface BashOptions {
+  cwd?: string;
+  commands?: CustomCommand[];
+  env?: Record<string, string>;
+  network?: NetworkConfig;
+}
+
+/** @deprecated Use {@link BashOptions} instead. */
+export type BashSessionOptions = BashOptions;
+
+export type WorkspaceChangeType = "create" | "update" | "delete";
+
+export type WorkspaceChangeEvent = {
+  type: WorkspaceChangeType;
+  path: string;
+  entryType: EntryType;
+};
+
+// ── Constants ────────────────────────────────────────────────────────
+
+const DEFAULT_INLINE_THRESHOLD = 1_500_000; // 1.5 MB
+const TEXT_ENCODER = new TextEncoder();
+const TEXT_DECODER = new TextDecoder();
+
+const MAX_SYMLINK_DEPTH = 40;
+
+const DEFAULT_BASH_LIMITS = {
+  maxCommandCount: 5000,
+  maxLoopIterations: 2000,
+  maxCallDepth: 50
+};
+
+const VALID_NAMESPACE = /^[a-zA-Z][a-zA-Z0-9_]*$/;
+
+const LIKE_ESCAPE = "\\";
+
+const MAX_STREAM_SIZE = 100 * 1024 * 1024; // 100 MB
+const MAX_DIFF_LINES = 10_000;
+const MAX_PATH_LENGTH = 4096;
+const MAX_SYMLINK_TARGET_LENGTH = 4096;
+const MAX_MKDIR_DEPTH = 100;
+
+const SESS_STATE_BEGIN = "__BASHSESSION_STATE_BEGIN__";
+const SESS_STATE_END = "__BASHSESSION_STATE_END__";
+const SESS_CWD_PREFIX = "__SESS_CWD__=";
+
+// Tracks which namespaces have been registered per host (agent) instance.
+const workspaceRegistry = new WeakMap<WorkspaceHost, Set<string>>();
+
+const wsChannel = channel("agents:workspace");
+
+// ── Workspace class ──────────────────────────────────────────────────
+
+export class Workspace {
+  private readonly host: WorkspaceHost;
+  private readonly namespace: string;
+  private readonly tableName: string;
+  private readonly indexName: string;
+  private readonly r2: R2Bucket | null;
+  private readonly r2Prefix: string | undefined;
+  private readonly threshold: number;
+  private readonly bashLimits: {
+    maxCommandCount: number;
+    maxLoopIterations: number;
+    maxCallDepth: number;
+  };
+  private readonly commands: CustomCommand[];
+  private readonly env: Record<string, string>;
+  private readonly network: NetworkConfig | undefined;
+  private readonly onChange:
+    | ((event: WorkspaceChangeEvent) => void)
+    | undefined;
+  private initialized = false;
+  private readonly sqlCache = new Map<
+    TemplateStringsArray,
+    TemplateStringsArray
+  >();
+
+  /**
+   * @param host - Any object with a `sql` tagged-template method (typically your Agent: `this`).
+   * @param options - Optional configuration (namespace, R2 bucket, thresholds, etc.).
+   *
+   * ```ts
+   * class MyAgent extends Agent<Env> {
+   *   workspace = new Workspace(this, {
+   *     r2: this.env.WORKSPACE_FILES,
+   *     // r2Prefix defaults to this.name (the Durable Object ID)
+   *   });
+   * }
+   * ```
+   */
+  constructor(host: WorkspaceHost, options?: WorkspaceOptions) {
+    const ns = options?.namespace ?? "default";
+    if (!VALID_NAMESPACE.test(ns)) {
+      throw new Error(
+        `Invalid workspace namespace "${ns}": must start with a letter and contain only alphanumeric characters or underscores`
+      );
+    }
+
+    // Detect duplicate registrations on the same agent
+    const registered = workspaceRegistry.get(host) ?? new Set<string>();
+    if (registered.has(ns)) {
+      throw new Error(
+        `Workspace namespace "${ns}" is already registered on this agent`
+      );
+    }
+    registered.add(ns);
+    workspaceRegistry.set(host, registered);
+
+    this.host = host;
+    this.namespace = ns;
+    this.tableName = `cf_workspace_${ns}`;
+    this.indexName = `cf_workspace_${ns}_parent`;
+    this.r2 = options?.r2 ?? null;
+    this.r2Prefix = options?.r2Prefix;
+    this.threshold = options?.inlineThreshold ?? DEFAULT_INLINE_THRESHOLD;
+    this.bashLimits = {
+      ...DEFAULT_BASH_LIMITS,
+      ...options?.bashLimits
+    };
+    this.commands = options?.commands ?? [];
+    this.env = options?.env ?? {};
+    this.network = options?.network;
+    this.onChange = options?.onChange;
+  }
+
+  private emit(
+    type: WorkspaceChangeType,
+    path: string,
+    entryType: EntryType
+  ): void {
+    if (this.onChange) this.onChange({ type, path, entryType });
+  }
+
+  private _observe(type: string, payload: Record<string, unknown>): void {
+    wsChannel.publish({
+      type,
+      name: this.host.name,
+      payload: { ...payload, namespace: this.namespace },
+      timestamp: Date.now()
+    });
+  }
+
+  // ── SQL helper ─────────────────────────────────────────────────
+  //
+  // Replaces __TABLE__ / __INDEX__ in the static template parts
+  // with the namespace-scoped names. The namespace is validated
+  // at construction time (alphanumeric only), so this is safe.
+
+  private sql<T = Record<string, string | number | boolean | null>>(
+    strings: TemplateStringsArray,
+    ...values: (string | number | boolean | null)[]
+  ): T[] {
+    let tsa = this.sqlCache.get(strings);
+    if (!tsa) {
+      const replaced = strings.map((s) =>
+        s
+          .replace(/__TABLE__/g, this.tableName)
+          .replace(/__INDEX__/g, this.indexName)
+      );
+      tsa = Object.assign(replaced, {
+        raw: replaced
+      }) as unknown as TemplateStringsArray;
+      this.sqlCache.set(strings, tsa);
+    }
+    return this.host.sql<T>(tsa, ...values);
+  }
+
+  // ── Lazy table init ─────────────────────────────────────────────
+
+  private ensureInit(): void {
+    if (this.initialized) return;
+    this.initialized = true;
+
+    this.sql`
+      CREATE TABLE IF NOT EXISTS __TABLE__ (
+        path            TEXT PRIMARY KEY,
+        parent_path     TEXT NOT NULL,
+        name            TEXT NOT NULL,
+        type            TEXT NOT NULL CHECK(type IN ('file','directory','symlink')),
+        mime_type       TEXT NOT NULL DEFAULT 'text/plain',
+        size            INTEGER NOT NULL DEFAULT 0,
+        storage_backend TEXT NOT NULL DEFAULT 'inline' CHECK(storage_backend IN ('inline','r2')),
+        r2_key          TEXT,
+        target          TEXT,
+        content_encoding TEXT NOT NULL DEFAULT 'utf8',
+        content         TEXT,
+        created_at      INTEGER NOT NULL DEFAULT (unixepoch()),
+        modified_at     INTEGER NOT NULL DEFAULT (unixepoch())
+      )
+    `;
+
+    this.sql`
+      CREATE INDEX IF NOT EXISTS __INDEX__
+        ON __TABLE__(parent_path)
+    `;
+
+    // Root directory always exists
+    const hasRoot =
+      this.sql<{ cnt: number }>`
+        SELECT COUNT(*) AS cnt FROM __TABLE__ WHERE path = '/'
+      `[0]?.cnt ?? 0;
+
+    if (hasRoot === 0) {
+      const now = Math.floor(Date.now() / 1000);
+      this.sql`
+        INSERT INTO __TABLE__
+          (path, parent_path, name, type, size, created_at, modified_at)
+        VALUES ('/', '', '', 'directory', 0, ${now}, ${now})
+      `;
+    }
+  }
+
+  // ── R2 helpers ─────────────────────────────────────────────────
+
+  private getR2(): R2Bucket | null {
+    return this.r2;
+  }
+
+  private resolveR2Prefix(): string {
+    if (this.r2Prefix !== undefined) return this.r2Prefix;
+    const name = this.host.name;
+    if (!name) {
+      throw new Error(
+        "[Workspace] R2 is configured but no r2Prefix was provided and host.name is not available. " +
+          "Either pass r2Prefix in WorkspaceOptions or ensure the host exposes a name property."
+      );
+    }
+    return name;
+  }
+
+  private r2Key(filePath: string): string {
+    return `${this.resolveR2Prefix()}/${this.namespace}${filePath}`;
+  }
+
+  // ── Symlink resolution ────────────────────────────────────────
+
+  private resolveSymlink(path: string, depth = 0): string {
+    if (depth > MAX_SYMLINK_DEPTH) {
+      throw new Error(`ELOOP: too many levels of symbolic links: ${path}`);
+    }
+    const rows = this.sql<{ type: string; target: string | null }>`
+      SELECT type, target FROM __TABLE__ WHERE path = ${path}
+    `;
+    const r = rows[0];
+    if (!r || r.type !== "symlink" || !r.target) return path;
+    const resolved = r.target.startsWith("/")
+      ? normalizePath(r.target)
+      : normalizePath(getParent(path) + "/" + r.target);
+    return this.resolveSymlink(resolved, depth + 1);
+  }
+
+  // ── Symlink API ───────────────────────────────────────────────
+
+  symlink(target: string, linkPath: string): void {
+    this.ensureInit();
+    if (!target || target.trim().length === 0) {
+      throw new Error("EINVAL: symlink target must not be empty");
+    }
+    if (target.length > MAX_SYMLINK_TARGET_LENGTH) {
+      throw new Error(
+        `ENAMETOOLONG: symlink target exceeds ${MAX_SYMLINK_TARGET_LENGTH} characters`
+      );
+    }
+    const normalized = normalizePath(linkPath);
+    if (normalized === "/")
+      throw new Error("EPERM: cannot create symlink at root");
+
+    const parentPath = getParent(normalized);
+    const name = getBasename(normalized);
+    const now = Math.floor(Date.now() / 1000);
+
+    this.ensureParentDir(parentPath);
+
+    const existing = this.sql<{ type: string }>`
+      SELECT type FROM __TABLE__ WHERE path = ${normalized}
+    `[0];
+    if (existing) {
+      throw new Error(`EEXIST: path already exists: ${linkPath}`);
+    }
+
+    this.sql`
+      INSERT INTO __TABLE__
+        (path, parent_path, name, type, target, size, created_at, modified_at)
+      VALUES
+        (${normalized}, ${parentPath}, ${name}, 'symlink', ${target}, 0, ${now}, ${now})
+    `;
+    this.emit("create", normalized, "symlink");
+  }
+
+  readlink(path: string): string {
+    this.ensureInit();
+    const normalized = normalizePath(path);
+    const rows = this.sql<{ type: string; target: string | null }>`
+      SELECT type, target FROM __TABLE__ WHERE path = ${normalized}
+    `;
+    const r = rows[0];
+    if (!r) throw new Error(`ENOENT: no such file or directory: ${path}`);
+    if (r.type !== "symlink" || !r.target)
+      throw new Error(`EINVAL: not a symlink: ${path}`);
+    return r.target;
+  }
+
+  lstat(path: string): FileStat | null {
+    this.ensureInit();
+    const normalized = normalizePath(path);
+    const rows = this.sql<{
+      path: string;
+      name: string;
+      type: string;
+      mime_type: string;
+      size: number;
+      created_at: number;
+      modified_at: number;
+      target: string | null;
+    }>`
+      SELECT path, name, type, mime_type, size, created_at, modified_at, target
+      FROM __TABLE__ WHERE path = ${normalized}
+    `;
+    const r = rows[0];
+    if (!r) return null;
+    return toFileInfo(r);
+  }
+
+  // ── Metadata ───────────────────────────────────────────────────
+
+  stat(path: string): FileStat | null {
+    this.ensureInit();
+    const normalized = normalizePath(path);
+    const resolved = this.resolveSymlink(normalized);
+    const rows = this.sql<{
+      path: string;
+      name: string;
+      type: string;
+      mime_type: string;
+      size: number;
+      created_at: number;
+      modified_at: number;
+      target: string | null;
+    }>`
+      SELECT path, name, type, mime_type, size, created_at, modified_at, target
+      FROM __TABLE__ WHERE path = ${resolved}
+    `;
+    const r = rows[0];
+    if (!r) return null;
+    return toFileInfo(r);
+  }
+
+  // ── File I/O ───────────────────────────────────────────────────
+
+  async readFile(path: string): Promise<string | null> {
+    this.ensureInit();
+    const normalized = normalizePath(path);
+    const resolved = this.resolveSymlink(normalized);
+    const rows = this.sql<{
+      type: string;
+      storage_backend: string;
+      r2_key: string | null;
+      content: string | null;
+      content_encoding: string;
+    }>`
+      SELECT type, storage_backend, r2_key, content, content_encoding
+      FROM __TABLE__ WHERE path = ${resolved}
+    `;
+    const r = rows[0];
+    if (!r) return null;
+    if (r.type !== "file") throw new Error(`EISDIR: ${path} is a directory`);
+    this._observe("workspace:read", {
+      path: resolved,
+      storage: r.storage_backend as "inline" | "r2"
+    });
+
+    if (r.storage_backend === "r2" && r.r2_key) {
+      const r2 = this.getR2();
+      if (!r2) {
+        throw new Error(
+          `File ${path} is stored in R2 but no R2 bucket was provided`
+        );
+      }
+      const obj = await r2.get(r.r2_key);
+      if (!obj) return "";
+      return await obj.text();
+    }
+
+    if (r.content_encoding === "base64" && r.content) {
+      const bytes = base64ToBytes(r.content);
+      return TEXT_DECODER.decode(bytes);
+    }
+    return r.content ?? "";
+  }
+
+  async readFileBytes(path: string): Promise<Uint8Array | null> {
+    this.ensureInit();
+    const normalized = normalizePath(path);
+    const resolved = this.resolveSymlink(normalized);
+    const rows = this.sql<{
+      type: string;
+      storage_backend: string;
+      r2_key: string | null;
+      content: string | null;
+      content_encoding: string;
+    }>`
+      SELECT type, storage_backend, r2_key, content, content_encoding
+      FROM __TABLE__ WHERE path = ${resolved}
+    `;
+    const r = rows[0];
+    if (!r) return null;
+    if (r.type !== "file") throw new Error(`EISDIR: ${path} is a directory`);
+    this._observe("workspace:read", {
+      path: resolved,
+      storage: r.storage_backend as "inline" | "r2"
+    });
+
+    if (r.storage_backend === "r2" && r.r2_key) {
+      const r2 = this.getR2();
+      if (!r2) {
+        throw new Error(
+          `File ${path} is stored in R2 but no R2 bucket was provided`
+        );
+      }
+      const obj = await r2.get(r.r2_key);
+      if (!obj) return new Uint8Array(0);
+      return new Uint8Array(await obj.arrayBuffer());
+    }
+
+    if (r.content_encoding === "base64" && r.content) {
+      return base64ToBytes(r.content);
+    }
+    return TEXT_ENCODER.encode(r.content ?? "");
+  }
+
+  async writeFileBytes(
+    path: string,
+    data: Uint8Array | ArrayBuffer,
+    mimeType = "application/octet-stream"
+  ): Promise<void> {
+    this.ensureInit();
+    const normalized = this.resolveSymlink(normalizePath(path));
+    if (normalized === "/")
+      throw new Error("EISDIR: cannot write to root directory");
+
+    const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : data;
+    const size = bytes.byteLength;
+    const parentPath = getParent(normalized);
+    const name = getBasename(normalized);
+    const now = Math.floor(Date.now() / 1000);
+
+    this.ensureParentDir(parentPath);
+
+    const existing = this.sql<{
+      storage_backend: string;
+      r2_key: string | null;
+    }>`
+      SELECT storage_backend, r2_key FROM __TABLE__ WHERE path = ${normalized}
+    `[0];
+
+    const r2 = this.getR2();
+
+    if (size >= this.threshold && r2) {
+      const key = this.r2Key(normalized);
+      if (existing?.storage_backend === "r2" && existing.r2_key !== key) {
+        await r2.delete(existing.r2_key!);
+      }
+      await r2.put(key, bytes, {
+        httpMetadata: { contentType: mimeType }
+      });
+      try {
+        this.sql`
+          INSERT INTO __TABLE__
+            (path, parent_path, name, type, mime_type, size,
+             storage_backend, r2_key, content_encoding, content, created_at, modified_at)
+          VALUES
+            (${normalized}, ${parentPath}, ${name}, 'file', ${mimeType}, ${size},
+             'r2', ${key}, 'base64', NULL, ${now}, ${now})
+          ON CONFLICT(path) DO UPDATE SET
+            mime_type         = excluded.mime_type,
+            size              = excluded.size,
+            storage_backend   = 'r2',
+            r2_key            = excluded.r2_key,
+            content_encoding  = 'base64',
+            content           = NULL,
+            modified_at       = excluded.modified_at
+        `;
+      } catch (sqlErr) {
+        try {
+          await r2.delete(key);
+        } catch {
+          console.error(
+            `[Workspace] Failed to clean up orphaned R2 object ${key} after SQL error`
+          );
+        }
+        throw sqlErr;
+      }
+      this.emit(existing ? "update" : "create", normalized, "file");
+      this._observe("workspace:write", {
+        path: normalized,
+        size,
+        storage: "r2" as const,
+        update: !!existing
+      });
+    } else {
+      if (size >= this.threshold && !r2) {
+        console.warn(
+          `[Workspace] File ${path} is ${size} bytes but no R2 bucket was provided. Storing inline.`
+        );
+      }
+      if (existing?.storage_backend === "r2" && existing.r2_key && r2) {
+        await r2.delete(existing.r2_key);
+      }
+      const b64 = bytesToBase64(bytes);
+      this.sql`
+        INSERT INTO __TABLE__
+          (path, parent_path, name, type, mime_type, size,
+           storage_backend, r2_key, content_encoding, content, created_at, modified_at)
+        VALUES
+          (${normalized}, ${parentPath}, ${name}, 'file', ${mimeType}, ${size},
+           'inline', NULL, 'base64', ${b64}, ${now}, ${now})
+        ON CONFLICT(path) DO UPDATE SET
+          mime_type         = excluded.mime_type,
+          size              = excluded.size,
+          storage_backend   = 'inline',
+          r2_key            = NULL,
+          content_encoding  = 'base64',
+          content           = excluded.content,
+          modified_at       = excluded.modified_at
+      `;
+      this.emit(existing ? "update" : "create", normalized, "file");
+      this._observe("workspace:write", {
+        path: normalized,
+        size,
+        storage: "inline" as const,
+        update: !!existing
+      });
+    }
+  }
+
+  async writeFile(
+    path: string,
+    content: string,
+    mimeType = "text/plain"
+  ): Promise<void> {
+    this.ensureInit();
+    const normalized = this.resolveSymlink(normalizePath(path));
+    if (normalized === "/")
+      throw new Error("EISDIR: cannot write to root directory");
+
+    const parentPath = getParent(normalized);
+    const name = getBasename(normalized);
+    const bytes = TEXT_ENCODER.encode(content);
+    const size = bytes.byteLength;
+    const now = Math.floor(Date.now() / 1000);
+
+    this.ensureParentDir(parentPath);
+
+    // Check if there's an existing R2 file that may need cleanup
+    const existing = this.sql<{
+      storage_backend: string;
+      r2_key: string | null;
+    }>`
+      SELECT storage_backend, r2_key FROM __TABLE__ WHERE path = ${normalized}
+    `[0];
+
+    const r2 = this.getR2();
+
+    if (size >= this.threshold && r2) {
+      const key = this.r2Key(normalized);
+
+      if (existing?.storage_backend === "r2" && existing.r2_key !== key) {
+        await r2.delete(existing.r2_key!);
+      }
+
+      // Write to R2 first. If this fails, SQL is untouched.
+      await r2.put(key, bytes, {
+        httpMetadata: { contentType: mimeType }
+      });
+
+      // Update SQL. If this fails, clean up R2.
+      try {
+        this.sql`
+          INSERT INTO __TABLE__
+            (path, parent_path, name, type, mime_type, size,
+             storage_backend, r2_key, content_encoding, content, created_at, modified_at)
+          VALUES
+            (${normalized}, ${parentPath}, ${name}, 'file', ${mimeType}, ${size},
+             'r2', ${key}, 'utf8', NULL, ${now}, ${now})
+          ON CONFLICT(path) DO UPDATE SET
+            mime_type         = excluded.mime_type,
+            size              = excluded.size,
+            storage_backend   = 'r2',
+            r2_key            = excluded.r2_key,
+            content_encoding  = 'utf8',
+            content           = NULL,
+            modified_at       = excluded.modified_at
+        `;
+      } catch (sqlErr) {
+        try {
+          await r2.delete(key);
+        } catch {
+          console.error(
+            `[Workspace] Failed to clean up orphaned R2 object ${key} after SQL error`
+          );
+        }
+        throw sqlErr;
+      }
+      this.emit(existing ? "update" : "create", normalized, "file");
+      this._observe("workspace:write", {
+        path: normalized,
+        size,
+        storage: "r2" as const,
+        update: !!existing
+      });
+    } else {
+      if (size >= this.threshold && !r2) {
+        console.warn(
+          `[Workspace] File ${path} is ${size} bytes but no R2 bucket was provided. Storing inline — this may hit SQLite row limits for very large files.`
+        );
+      }
+
+      // Going inline: delete any existing R2 object first.
+      if (existing?.storage_backend === "r2" && existing.r2_key && r2) {
+        await r2.delete(existing.r2_key);
+      }
+
+      this.sql`
+        INSERT INTO __TABLE__
+          (path, parent_path, name, type, mime_type, size,
+           storage_backend, r2_key, content_encoding, content, created_at, modified_at)
+        VALUES
+          (${normalized}, ${parentPath}, ${name}, 'file', ${mimeType}, ${size},
+           'inline', NULL, 'utf8', ${content}, ${now}, ${now})
+        ON CONFLICT(path) DO UPDATE SET
+          mime_type         = excluded.mime_type,
+          size              = excluded.size,
+          storage_backend   = 'inline',
+          r2_key            = NULL,
+          content_encoding  = 'utf8',
+          content           = excluded.content,
+          modified_at       = excluded.modified_at
+      `;
+      this.emit(existing ? "update" : "create", normalized, "file");
+      this._observe("workspace:write", {
+        path: normalized,
+        size,
+        storage: "inline" as const,
+        update: !!existing
+      });
+    }
+  }
+
+  async readFileStream(
+    path: string
+  ): Promise<ReadableStream<Uint8Array> | null> {
+    this.ensureInit();
+    const normalized = normalizePath(path);
+    const resolved = this.resolveSymlink(normalized);
+    const rows = this.sql<{
+      type: string;
+      storage_backend: string;
+      r2_key: string | null;
+      content: string | null;
+      content_encoding: string;
+    }>`
+      SELECT type, storage_backend, r2_key, content, content_encoding
+      FROM __TABLE__ WHERE path = ${resolved}
+    `;
+    const r = rows[0];
+    if (!r) return null;
+    if (r.type !== "file") throw new Error(`EISDIR: ${path} is a directory`);
+    this._observe("workspace:read", {
+      path: resolved,
+      storage: r.storage_backend as "inline" | "r2"
+    });
+
+    if (r.storage_backend === "r2" && r.r2_key) {
+      const r2 = this.getR2();
+      if (!r2) {
+        throw new Error(
+          `File ${path} is stored in R2 but no R2 bucket was provided`
+        );
+      }
+      const obj = await r2.get(r.r2_key);
+      if (!obj) {
+        return new ReadableStream({
+          start(c) {
+            c.close();
+          }
+        });
+      }
+      return obj.body;
+    }
+
+    // Inline: wrap content in a ReadableStream
+    const bytes =
+      r.content_encoding === "base64" && r.content
+        ? base64ToBytes(r.content)
+        : TEXT_ENCODER.encode(r.content ?? "");
+    return new ReadableStream({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      }
+    });
+  }
+
+  async writeFileStream(
+    path: string,
+    stream: ReadableStream<Uint8Array>,
+    mimeType = "application/octet-stream"
+  ): Promise<void> {
+    // Collect stream into a single buffer (capped at MAX_STREAM_SIZE)
+    const reader = stream.getReader();
+    const chunks: Uint8Array[] = [];
+    let totalSize = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalSize += value.byteLength;
+      if (totalSize > MAX_STREAM_SIZE) {
+        reader.cancel();
+        throw new Error(
+          `EFBIG: stream exceeds maximum size of ${MAX_STREAM_SIZE} bytes`
+        );
+      }
+      chunks.push(value);
+    }
+
+    const buffer = new Uint8Array(totalSize);
+    let offset = 0;
+    for (const chunk of chunks) {
+      buffer.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+
+    await this.writeFileBytes(path, buffer, mimeType);
+  }
+
+  async appendFile(
+    path: string,
+    content: string,
+    mimeType = "text/plain"
+  ): Promise<void> {
+    this.ensureInit();
+    const normalized = this.resolveSymlink(normalizePath(path));
+
+    // Check if file exists and what storage it uses
+    const row = this.sql<{
+      type: string;
+      storage_backend: string;
+      content_encoding: string;
+    }>`
+      SELECT type, storage_backend, content_encoding
+      FROM __TABLE__ WHERE path = ${normalized}
+    `[0];
+
+    if (!row) {
+      // File doesn't exist — create it
+      await this.writeFile(path, content, mimeType);
+      return;
+    }
+
+    if (row.type !== "file") {
+      throw new Error(`EISDIR: ${path} is a directory`);
+    }
+
+    // Fast path: inline utf8 file — SQL concat avoids full read+rewrite
+    if (row.storage_backend === "inline" && row.content_encoding === "utf8") {
+      const appendSize = TEXT_ENCODER.encode(content).byteLength;
+      const now = Math.floor(Date.now() / 1000);
+      this.sql`
+        UPDATE __TABLE__ SET
+          content = content || ${content},
+          size = size + ${appendSize},
+          modified_at = ${now}
+        WHERE path = ${normalized}
+      `;
+      this.emit("update", normalized, "file");
+      return;
+    }
+
+    // Slow path: R2 or base64 — full read + concat + write
+    const existing = await this.readFile(path);
+    await this.writeFile(path, (existing ?? "") + content, mimeType);
+  }
+
+  async deleteFile(path: string): Promise<boolean> {
+    this.ensureInit();
+    const normalized = normalizePath(path);
+    const rows = this.sql<{
+      type: string;
+      storage_backend: string;
+      r2_key: string | null;
+    }>`
+      SELECT type, storage_backend, r2_key FROM __TABLE__ WHERE path = ${normalized}
+    `;
+    if (!rows[0]) return false;
+    if (rows[0].type === "directory")
+      throw new Error(`EISDIR: ${path} is a directory — use rm() instead`);
+
+    if (rows[0].storage_backend === "r2" && rows[0].r2_key) {
+      const r2 = this.getR2();
+      if (r2) await r2.delete(rows[0].r2_key);
+    }
+
+    this.sql`DELETE FROM __TABLE__ WHERE path = ${normalized}`;
+    this.emit("delete", normalized, rows[0].type as EntryType);
+    this._observe("workspace:delete", { path: normalized });
+    return true;
+  }
+
+  fileExists(path: string): boolean {
+    this.ensureInit();
+    const resolved = this.resolveSymlink(normalizePath(path));
+    const rows = this.sql<{ type: string }>`
+      SELECT type FROM __TABLE__ WHERE path = ${resolved}
+    `;
+    return rows.length > 0 && rows[0].type === "file";
+  }
+
+  exists(path: string): boolean {
+    this.ensureInit();
+    const normalized = normalizePath(path);
+    const rows = this.sql<{ cnt: number }>`
+      SELECT COUNT(*) AS cnt FROM __TABLE__ WHERE path = ${normalized}
+    `;
+    return (rows[0]?.cnt ?? 0) > 0;
+  }
+
+  // ── Directory operations ───────────────────────────────────────
+
+  readDir(dir = "/", opts?: { limit?: number; offset?: number }): FileInfo[] {
+    this.ensureInit();
+    const normalized = normalizePath(dir);
+    const limit = opts?.limit ?? 1000;
+    const offset = opts?.offset ?? 0;
+    const rows = this.sql<{
+      path: string;
+      name: string;
+      type: string;
+      mime_type: string;
+      size: number;
+      created_at: number;
+      modified_at: number;
+    }>`
+      SELECT path, name, type, mime_type, size, created_at, modified_at
+      FROM __TABLE__
+      WHERE parent_path = ${normalized}
+      ORDER BY type ASC, name ASC
+      LIMIT ${limit} OFFSET ${offset}
+    `;
+    return rows.map(toFileInfo);
+  }
+
+  glob(pattern: string): FileInfo[] {
+    this.ensureInit();
+    const normalized = normalizePath(pattern);
+    const prefix = getGlobPrefix(normalized);
+    const likePattern = escapeLike(prefix) + "%";
+    const regex = globToRegex(normalized);
+
+    const rows = this.sql<{
+      path: string;
+      name: string;
+      type: string;
+      mime_type: string;
+      size: number;
+      created_at: number;
+      modified_at: number;
+      target: string | null;
+    }>`
+      SELECT path, name, type, mime_type, size, created_at, modified_at, target
+      FROM __TABLE__
+      WHERE path LIKE ${likePattern} ESCAPE ${LIKE_ESCAPE}
+      ORDER BY path
+    `;
+
+    return rows.filter((r) => regex.test(r.path)).map(toFileInfo);
+  }
+
+  mkdir(path: string, opts?: { recursive?: boolean }, _depth = 0): void {
+    this.ensureInit();
+    if (_depth > MAX_MKDIR_DEPTH) {
+      throw new Error(
+        `ELOOP: mkdir recursion too deep (max ${MAX_MKDIR_DEPTH} levels)`
+      );
+    }
+    const normalized = normalizePath(path);
+    if (normalized === "/") return;
+
+    const existing = this.sql<{ type: string }>`
+      SELECT type FROM __TABLE__ WHERE path = ${normalized}
+    `;
+
+    if (existing.length > 0) {
+      if (existing[0].type === "directory" && opts?.recursive) return;
+      throw new Error(
+        existing[0].type === "directory"
+          ? `EEXIST: directory already exists: ${path}`
+          : `EEXIST: path exists as a file: ${path}`
+      );
+    }
+
+    const parentPath = getParent(normalized);
+    const parentRows = this.sql<{ type: string }>`
+      SELECT type FROM __TABLE__ WHERE path = ${parentPath}
+    `;
+
+    if (!parentRows[0]) {
+      if (opts?.recursive) {
+        this.mkdir(parentPath, { recursive: true }, _depth + 1);
+      } else {
+        throw new Error(`ENOENT: parent directory not found: ${parentPath}`);
+      }
+    } else if (parentRows[0].type !== "directory") {
+      throw new Error(`ENOTDIR: parent is not a directory: ${parentPath}`);
+    }
+
+    const name = getBasename(normalized);
+    const now = Math.floor(Date.now() / 1000);
+    this.sql`
+      INSERT INTO __TABLE__
+        (path, parent_path, name, type, size, created_at, modified_at)
+      VALUES (${normalized}, ${parentPath}, ${name}, 'directory', 0, ${now}, ${now})
+    `;
+    this.emit("create", normalized, "directory");
+    this._observe("workspace:mkdir", {
+      path: normalized,
+      recursive: !!opts?.recursive
+    });
+  }
+
+  async rm(
+    path: string,
+    opts?: { recursive?: boolean; force?: boolean }
+  ): Promise<void> {
+    this.ensureInit();
+    const normalized = normalizePath(path);
+    if (normalized === "/")
+      throw new Error("EPERM: cannot remove root directory");
+
+    const rows = this.sql<{ type: string }>`
+      SELECT type FROM __TABLE__ WHERE path = ${normalized}
+    `;
+
+    if (!rows[0]) {
+      if (opts?.force) return;
+      throw new Error(`ENOENT: no such file or directory: ${path}`);
+    }
+
+    if (rows[0].type === "directory") {
+      const children = this.sql<{ cnt: number }>`
+        SELECT COUNT(*) AS cnt FROM __TABLE__ WHERE parent_path = ${normalized}
+      `;
+      if ((children[0]?.cnt ?? 0) > 0) {
+        if (!opts?.recursive) {
+          throw new Error(`ENOTEMPTY: directory not empty: ${path}`);
+        }
+        await this.deleteDescendants(normalized);
+      }
+    } else {
+      const fileRow = this.sql<{
+        storage_backend: string;
+        r2_key: string | null;
+      }>`
+        SELECT storage_backend, r2_key FROM __TABLE__ WHERE path = ${normalized}
+      `[0];
+      if (fileRow?.storage_backend === "r2" && fileRow.r2_key) {
+        const r2 = this.getR2();
+        if (r2) await r2.delete(fileRow.r2_key);
+      }
+    }
+
+    this.sql`DELETE FROM __TABLE__ WHERE path = ${normalized}`;
+    this.emit("delete", normalized, rows[0].type as EntryType);
+    this._observe("workspace:rm", {
+      path: normalized,
+      recursive: !!opts?.recursive
+    });
+  }
+
+  // ── Copy / Move ───────────────────────────────────────────────
+
+  async cp(
+    src: string,
+    dest: string,
+    opts?: { recursive?: boolean }
+  ): Promise<void> {
+    this.ensureInit();
+    const srcNorm = normalizePath(src);
+    const destNorm = normalizePath(dest);
+    const srcStat = this.lstat(srcNorm);
+    if (!srcStat) throw new Error(`ENOENT: no such file or directory: ${src}`);
+
+    if (srcStat.type === "symlink") {
+      const target = this.readlink(srcNorm);
+      this.symlink(target, destNorm);
+      return;
+    }
+
+    if (srcStat.type === "directory") {
+      if (!opts?.recursive) {
+        throw new Error(
+          `EISDIR: cannot copy directory without recursive: ${src}`
+        );
+      }
+      this.mkdir(destNorm, { recursive: true });
+      for (const child of this.readDir(srcNorm)) {
+        await this.cp(child.path, `${destNorm}/${child.name}`, opts);
+      }
+      return;
+    }
+
+    // File: read bytes and write to dest (preserves binary/text)
+    const bytes = await this.readFileBytes(srcNorm);
+    if (bytes) {
+      await this.writeFileBytes(destNorm, bytes, srcStat.mimeType);
+    } else {
+      await this.writeFile(destNorm, "", srcStat.mimeType);
+    }
+    this._observe("workspace:cp", {
+      src: srcNorm,
+      dest: destNorm,
+      recursive: !!opts?.recursive
+    });
+  }
+
+  async mv(
+    src: string,
+    dest: string,
+    opts?: { recursive?: boolean }
+  ): Promise<void> {
+    this.ensureInit();
+    const srcNorm = normalizePath(src);
+    const destNorm = normalizePath(dest);
+    const srcStat = this.lstat(srcNorm);
+    if (!srcStat) throw new Error(`ENOENT: no such file or directory: ${src}`);
+
+    // Directories: fall back to cp+rm (path rewriting is complex)
+    if (srcStat.type === "directory") {
+      if (!(opts?.recursive ?? true)) {
+        throw new Error(
+          `EISDIR: cannot move directory without recursive: ${src}`
+        );
+      }
+      await this.cp(src, dest, { recursive: true });
+      await this.rm(src, { recursive: true, force: true });
+      return;
+    }
+
+    // Single file or symlink: use SQL UPDATE (much faster than cp+rm)
+    const destParent = getParent(destNorm);
+    const destName = getBasename(destNorm);
+    this.ensureParentDir(destParent);
+
+    // Remove existing dest if present
+    const existingDest = this.sql<{ type: string }>`
+      SELECT type FROM __TABLE__ WHERE path = ${destNorm}
+    `[0];
+    if (existingDest) {
+      if (existingDest.type === "directory") {
+        throw new Error(`EISDIR: cannot overwrite directory: ${dest}`);
+      }
+      await this.deleteFile(destNorm);
+    }
+
+    // For R2-backed files, copy the R2 object to new key first
+    if (srcStat.type === "file") {
+      const row = this.sql<{
+        storage_backend: string;
+        r2_key: string | null;
+      }>`
+        SELECT storage_backend, r2_key FROM __TABLE__ WHERE path = ${srcNorm}
+      `[0];
+      if (row?.storage_backend === "r2" && row.r2_key) {
+        const r2 = this.getR2();
+        if (r2) {
+          const newKey = this.r2Key(destNorm);
+          const obj = await r2.get(row.r2_key);
+          if (obj) {
+            await r2.put(newKey, await obj.arrayBuffer(), {
+              httpMetadata: obj.httpMetadata
+            });
+          }
+          await r2.delete(row.r2_key);
+          const now = Math.floor(Date.now() / 1000);
+          this.sql`
+            UPDATE __TABLE__ SET
+              path = ${destNorm},
+              parent_path = ${destParent},
+              name = ${destName},
+              r2_key = ${newKey},
+              modified_at = ${now}
+            WHERE path = ${srcNorm}
+          `;
+          this.emit("delete", srcNorm, "file");
+          this.emit("create", destNorm, "file");
+          this._observe("workspace:mv", {
+            src: srcNorm,
+            dest: destNorm
+          });
+          return;
+        }
+      }
+    }
+
+    // Inline file or symlink: single UPDATE
+    const now = Math.floor(Date.now() / 1000);
+    this.sql`
+      UPDATE __TABLE__ SET
+        path = ${destNorm},
+        parent_path = ${destParent},
+        name = ${destName},
+        modified_at = ${now}
+      WHERE path = ${srcNorm}
+    `;
+    this.emit("delete", srcNorm, srcStat.type);
+    this.emit("create", destNorm, srcStat.type);
+    this._observe("workspace:mv", { src: srcNorm, dest: destNorm });
+  }
+
+  // ── Diff ───────────────────────────────────────────────────────
+
+  async diff(pathA: string, pathB: string): Promise<string> {
+    const contentA = await this.readFile(pathA);
+    if (contentA === null) throw new Error(`ENOENT: no such file: ${pathA}`);
+    const contentB = await this.readFile(pathB);
+    if (contentB === null) throw new Error(`ENOENT: no such file: ${pathB}`);
+    const linesA = contentA.split("\n").length;
+    const linesB = contentB.split("\n").length;
+    if (linesA > MAX_DIFF_LINES || linesB > MAX_DIFF_LINES) {
+      throw new Error(
+        `EFBIG: files too large for diff (max ${MAX_DIFF_LINES} lines)`
+      );
+    }
+    return unifiedDiff(
+      contentA,
+      contentB,
+      normalizePath(pathA),
+      normalizePath(pathB)
+    );
+  }
+
+  async diffContent(path: string, newContent: string): Promise<string> {
+    const existing = await this.readFile(path);
+    if (existing === null) throw new Error(`ENOENT: no such file: ${path}`);
+    const linesA = existing.split("\n").length;
+    const linesB = newContent.split("\n").length;
+    if (linesA > MAX_DIFF_LINES || linesB > MAX_DIFF_LINES) {
+      throw new Error(
+        `EFBIG: content too large for diff (max ${MAX_DIFF_LINES} lines)`
+      );
+    }
+    const normalized = normalizePath(path);
+    return unifiedDiff(existing, newContent, normalized, normalized);
+  }
+
+  // ── Bash execution ─────────────────────────────────────────────
+
+  private _resolveBashConfig(options?: BashOptions): {
+    commands: CustomCommand[] | undefined;
+    env: Record<string, string> | undefined;
+    network: NetworkConfig | undefined;
+  } {
+    const commands = options?.commands
+      ? [...this.commands, ...options.commands]
+      : this.commands.length > 0
+        ? this.commands
+        : undefined;
+    const hasWsEnv = Object.keys(this.env).length > 0;
+    const env =
+      options?.env && hasWsEnv
+        ? { ...this.env, ...options.env }
+        : (options?.env ?? (hasWsEnv ? this.env : undefined));
+    const network = options?.network ?? this.network;
+    return { commands, env, network };
+  }
+
+  async bash(command: string, options?: BashOptions): Promise<BashResult> {
+    this.ensureInit();
+    const { commands, env, network } = this._resolveBashConfig(options);
+    const fs = new WorkspaceFileSystem(this);
+    const bashInstance = new Bash({
+      fs,
+      cwd: options?.cwd ?? "/",
+      executionLimits: this.bashLimits,
+      customCommands: commands,
+      env,
+      network
+    });
+    const t0 = Date.now();
+    const result = await bashInstance.exec(command);
+    this._observe("workspace:bash", {
+      command,
+      exitCode: result.exitCode,
+      durationMs: Date.now() - t0
+    });
+    return {
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode
+    };
+  }
+
+  createBashSession(options?: BashOptions): BashSession {
+    this.ensureInit();
+    const { commands, env, network } = this._resolveBashConfig(options);
+    return new BashSession({
+      ws: this,
+      fs: new WorkspaceFileSystem(this),
+      bashLimits: this.bashLimits,
+      commands,
+      env: env ? { ...env } : {},
+      network,
+      cwd: options?.cwd ?? "/",
+      observe: this._observe.bind(this)
+    });
+  }
+
+  // ── Info ────────────────────────────────────────────────────────
+
+  getWorkspaceInfo(): {
+    fileCount: number;
+    directoryCount: number;
+    totalBytes: number;
+    r2FileCount: number;
+  } {
+    this.ensureInit();
+    const rows = this.sql<{
+      files: number;
+      dirs: number;
+      total: number;
+      r2files: number;
+    }>`
+      SELECT
+        SUM(CASE WHEN type = 'file'                               THEN 1 ELSE 0 END) AS files,
+        SUM(CASE WHEN type = 'directory'                          THEN 1 ELSE 0 END) AS dirs,
+        COALESCE(SUM(CASE WHEN type = 'file' THEN size ELSE 0 END), 0)               AS total,
+        SUM(CASE WHEN type = 'file' AND storage_backend = 'r2'   THEN 1 ELSE 0 END) AS r2files
+      FROM __TABLE__
+    `;
+    return {
+      fileCount: rows[0]?.files ?? 0,
+      directoryCount: rows[0]?.dirs ?? 0,
+      totalBytes: rows[0]?.total ?? 0,
+      r2FileCount: rows[0]?.r2files ?? 0
+    };
+  }
+
+  // ── Internal helpers (used by WorkspaceFileSystem) ─────────────
+
+  /** @internal */
+  _getAllPaths(): string[] {
+    this.ensureInit();
+    return this.sql<{ path: string }>`
+      SELECT path FROM __TABLE__ ORDER BY path
+    `.map((r) => r.path);
+  }
+
+  /** @internal */
+  _updateModifiedAt(path: string, mtime: Date): void {
+    this.ensureInit();
+    const normalized = normalizePath(path);
+    const ts = Math.floor(mtime.getTime() / 1000);
+    this.sql`
+      UPDATE __TABLE__ SET modified_at = ${ts} WHERE path = ${normalized}
+    `;
+  }
+
+  // ── Private helpers ────────────────────────────────────────────
+
+  private ensureParentDir(dirPath: string): void {
+    if (!dirPath || dirPath === "/") return;
+
+    // Quick check: immediate parent exists?
+    const rows = this.sql<{ type: string }>`
+      SELECT type FROM __TABLE__ WHERE path = ${dirPath}
+    `;
+    if (rows[0]) {
+      if (rows[0].type !== "directory") {
+        throw new Error(`ENOTDIR: ${dirPath} is not a directory`);
+      }
+      return;
+    }
+
+    // Walk up to find the deepest existing ancestor
+    const missing: string[] = [dirPath];
+    let current = getParent(dirPath);
+    while (current && current !== "/") {
+      const r = this.sql<{ type: string }>`
+        SELECT type FROM __TABLE__ WHERE path = ${current}
+      `;
+      if (r[0]) {
+        if (r[0].type !== "directory") {
+          throw new Error(`ENOTDIR: ${current} is not a directory`);
+        }
+        break;
+      }
+      missing.push(current);
+      current = getParent(current);
+    }
+
+    // Insert missing ancestors top-down
+    const now = Math.floor(Date.now() / 1000);
+    for (let i = missing.length - 1; i >= 0; i--) {
+      const p = missing[i];
+      const parentPath = getParent(p);
+      const name = getBasename(p);
+      this.sql`
+        INSERT INTO __TABLE__
+          (path, parent_path, name, type, size, created_at, modified_at)
+        VALUES (${p}, ${parentPath}, ${name}, 'directory', 0, ${now}, ${now})
+      `;
+      this.emit("create", p, "directory");
+    }
+  }
+
+  private async deleteDescendants(dirPath: string): Promise<void> {
+    const pattern = escapeLike(dirPath) + "/%";
+
+    const r2Rows = this.sql<{ r2_key: string }>`
+      SELECT r2_key FROM __TABLE__
+      WHERE path LIKE ${pattern} ESCAPE ${LIKE_ESCAPE}
+        AND storage_backend = 'r2'
+        AND r2_key IS NOT NULL
+    `;
+
+    if (r2Rows.length > 0) {
+      const r2 = this.getR2();
+      if (r2) {
+        const keys = r2Rows.map((r) => r.r2_key);
+        await r2.delete(keys);
+      }
+    }
+
+    this
+      .sql`DELETE FROM __TABLE__ WHERE path LIKE ${pattern} ESCAPE ${LIKE_ESCAPE}`;
+  }
+}
+
+// ── BashSession ──────────────────────────────────────────────────────
+//
+// Preserves cwd and all shell variables across multiple exec() calls.
+// Each exec() creates a fresh Bash instance seeded with the tracked state.
+// After execution, cwd and env are captured via stdout sentinels that
+// are stripped before returning the result to the caller.
+// Created via workspace.createBashSession().
+
+interface BashSessionInit {
+  ws: Workspace;
+  fs: WorkspaceFileSystem;
+  bashLimits: {
+    maxCommandCount: number;
+    maxLoopIterations: number;
+    maxCallDepth: number;
+  };
+  commands: CustomCommand[] | undefined;
+  env: Record<string, string>;
+  network: NetworkConfig | undefined;
+  cwd: string;
+  observe: (type: string, payload: Record<string, unknown>) => void;
+}
+
+export class BashSession {
+  private readonly _ws: Workspace;
+  private readonly _fs: WorkspaceFileSystem;
+  private readonly _bashLimits: {
+    maxCommandCount: number;
+    maxLoopIterations: number;
+    maxCallDepth: number;
+  };
+  private readonly _customCommands: CustomCommand[] | undefined;
+  private readonly _networkConfig: NetworkConfig | undefined;
+  private readonly _observe: (
+    type: string,
+    payload: Record<string, unknown>
+  ) => void;
+  private _currentCwd: string;
+  private _currentEnv: Record<string, string>;
+  private _closed = false;
+
+  /** @internal — use workspace.createBashSession() instead */
+  constructor(init: BashSessionInit) {
+    this._ws = init.ws;
+    this._fs = init.fs;
+    this._bashLimits = init.bashLimits;
+    this._customCommands = init.commands;
+    this._networkConfig = init.network;
+    this._observe = init.observe;
+    this._currentCwd = init.cwd;
+    this._currentEnv = init.env;
+  }
+
+  async exec(command: string): Promise<BashResult> {
+    if (this._closed) {
+      throw new Error("BashSession is closed");
+    }
+
+    const bash = new Bash({
+      fs: this._fs,
+      cwd: this._currentCwd,
+      env:
+        Object.keys(this._currentEnv).length > 0 ? this._currentEnv : undefined,
+      executionLimits: this._bashLimits,
+      customCommands: this._customCommands,
+      network: this._networkConfig
+    });
+
+    const wrapped =
+      `${command}\n__sess_rc=$?\n` +
+      `echo "${SESS_STATE_BEGIN}"\n` +
+      `echo "${SESS_CWD_PREFIX}$(pwd)"\n` +
+      `env\n` +
+      `echo "${SESS_STATE_END}"\n` +
+      `exit $__sess_rc`;
+
+    const t0 = Date.now();
+    const result = await bash.exec(wrapped);
+
+    let stdout = result.stdout;
+    const beginIdx = stdout.lastIndexOf(SESS_STATE_BEGIN);
+    const endIdx = stdout.lastIndexOf(SESS_STATE_END);
+    if (beginIdx >= 0 && endIdx > beginIdx) {
+      const stateBlock = stdout.slice(
+        beginIdx + SESS_STATE_BEGIN.length + 1,
+        endIdx
+      );
+      const lines = stateBlock.split("\n");
+      const newEnv: Record<string, string> = {};
+      for (const line of lines) {
+        if (line.startsWith(SESS_CWD_PREFIX)) {
+          const cwd = line.slice(SESS_CWD_PREFIX.length).trim();
+          if (cwd) this._currentCwd = cwd;
+        } else if (line.includes("=")) {
+          const eqIdx = line.indexOf("=");
+          const key = line.slice(0, eqIdx);
+          const value = line.slice(eqIdx + 1);
+          if (key && key !== "__sess_rc") {
+            newEnv[key] = value;
+          }
+        }
+      }
+      if (Object.keys(newEnv).length > 0) {
+        this._currentEnv = newEnv;
+      }
+      let cutStart = beginIdx;
+      if (cutStart > 0 && stdout[cutStart - 1] === "\n") cutStart--;
+      stdout = stdout.slice(0, cutStart);
+    }
+
+    this._observe("workspace:bash", {
+      command,
+      exitCode: result.exitCode,
+      durationMs: Date.now() - t0,
+      session: true
+    });
+
+    return {
+      stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode
+    };
+  }
+
+  get cwd(): string {
+    return this._currentCwd;
+  }
+
+  get env(): Record<string, string> {
+    return { ...this._currentEnv };
+  }
+
+  get isClosed(): boolean {
+    return this._closed;
+  }
+
+  close(): void {
+    this._closed = true;
+  }
+
+  [Symbol.dispose](): void {
+    this.close();
+  }
+}
+
+// ── WorkspaceFileSystem (IFileSystem bridge for just-bash) ───────────
+//
+// Bridges the workspace's async file methods into the IFileSystem
+// interface that just-bash expects. All reads/writes go through the
+// workspace so bash commands share the same durable storage.
+//
+// We define the IFileSystem shape locally to avoid a hard dependency
+// on just-bash types at compile time.
+
+interface FsStat {
+  isFile: boolean;
+  isDirectory: boolean;
+  isSymbolicLink: boolean;
+  mode: number;
+  size: number;
+  mtime: Date;
+}
+
+interface DirentEntry {
+  name: string;
+  isFile: boolean;
+  isDirectory: boolean;
+  isSymbolicLink: boolean;
+}
+
+type FileContent = string | Uint8Array;
+type BufferEncoding = "utf-8" | "utf8" | "ascii" | "base64" | "hex" | "latin1";
+type ReadFileOptions = { encoding?: BufferEncoding | null };
+type WriteFileOptions = { encoding?: BufferEncoding };
+type MkdirOptions = { recursive?: boolean };
+type RmOptions = { recursive?: boolean; force?: boolean };
+type CpOptions = { recursive?: boolean };
+
+function fileContentToString(content: FileContent): string {
+  return typeof content === "string" ? content : TEXT_DECODER.decode(content);
+}
+
+class WorkspaceFileSystem {
+  constructor(private ws: Workspace) {}
+
+  async readFile(
+    path: string,
+    _options?: ReadFileOptions | BufferEncoding
+  ): Promise<string> {
+    const content = await this.ws.readFile(path);
+    if (content === null)
+      throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
+    return content;
+  }
+
+  async readFileBuffer(path: string): Promise<Uint8Array> {
+    const bytes = await this.ws.readFileBytes(path);
+    if (bytes === null)
+      throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
+    return bytes;
+  }
+
+  async writeFile(
+    path: string,
+    content: FileContent,
+    _options?: WriteFileOptions | BufferEncoding
+  ): Promise<void> {
+    if (typeof content === "string") {
+      await this.ws.writeFile(path, content);
+    } else {
+      await this.ws.writeFileBytes(path, content);
+    }
+  }
+
+  async appendFile(
+    path: string,
+    content: FileContent,
+    _options?: WriteFileOptions | BufferEncoding
+  ): Promise<void> {
+    await this.ws.appendFile(path, fileContentToString(content));
+  }
+
+  async exists(path: string): Promise<boolean> {
+    return this.ws.stat(path) !== null;
+  }
+
+  async stat(path: string): Promise<FsStat> {
+    const s = this.ws.stat(path);
+    if (!s)
+      throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
+    return {
+      isFile: s.type === "file",
+      isDirectory: s.type === "directory",
+      isSymbolicLink: false,
+      mode: s.type === "directory" ? 0o755 : 0o644,
+      size: s.size,
+      mtime: new Date(s.updatedAt)
+    };
+  }
+
+  async lstat(path: string): Promise<FsStat> {
+    const s = this.ws.lstat(path);
+    if (!s)
+      throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
+    return {
+      isFile: s.type === "file",
+      isDirectory: s.type === "directory",
+      isSymbolicLink: s.type === "symlink",
+      mode: s.type === "directory" ? 0o755 : 0o644,
+      size: s.size,
+      mtime: new Date(s.updatedAt)
+    };
+  }
+
+  async mkdir(path: string, options?: MkdirOptions): Promise<void> {
+    this.ws.mkdir(path, options);
+  }
+
+  async readdir(path: string): Promise<string[]> {
+    return this.ws.readDir(path).map((e) => e.name);
+  }
+
+  async readdirWithFileTypes(path: string): Promise<DirentEntry[]> {
+    return this.ws.readDir(path).map((e) => ({
+      name: e.name,
+      isFile: e.type === "file",
+      isDirectory: e.type === "directory",
+      isSymbolicLink: e.type === "symlink"
+    }));
+  }
+
+  async rm(path: string, options?: RmOptions): Promise<void> {
+    await this.ws.rm(path, options);
+  }
+
+  async cp(src: string, dest: string, options?: CpOptions): Promise<void> {
+    await this.ws.cp(src, dest, options);
+  }
+
+  async mv(src: string, dest: string): Promise<void> {
+    await this.ws.mv(src, dest);
+  }
+
+  resolvePath(base: string, path: string): string {
+    const raw = path.startsWith("/") ? path : `${base}/${path}`;
+    const parts = raw.split("/").filter(Boolean);
+    const resolved: string[] = [];
+    for (const part of parts) {
+      if (part === "..") resolved.pop();
+      else if (part !== ".") resolved.push(part);
+    }
+    return "/" + resolved.join("/");
+  }
+
+  getAllPaths(): string[] {
+    return this.ws._getAllPaths();
+  }
+
+  async chmod(_path: string, _mode: number): Promise<void> {
+    // no-op
+  }
+
+  async symlink(target: string, linkPath: string): Promise<void> {
+    this.ws.symlink(target, linkPath);
+  }
+
+  async link(_existingPath: string, _newPath: string): Promise<void> {
+    throw new Error("ENOSYS: hard links not supported in workspace filesystem");
+  }
+
+  async readlink(path: string): Promise<string> {
+    return this.ws.readlink(path);
+  }
+
+  async realpath(path: string): Promise<string> {
+    const normalized = normalizePath(path);
+    const s = this.ws.lstat(normalized);
+    if (!s)
+      throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
+    if (s.type === "symlink") {
+      const target = this.ws.readlink(normalized);
+      const resolved = target.startsWith("/")
+        ? normalizePath(target)
+        : normalizePath(getParent(normalized) + "/" + target);
+      return this.realpath(resolved);
+    }
+    return normalized;
+  }
+
+  async utimes(_path: string, _atime: Date, mtime: Date): Promise<void> {
+    this.ws._updateModifiedAt(_path, mtime);
+  }
+}
+
+// ── Base64 helpers ───────────────────────────────────────────────────
+
+function bytesToBase64(bytes: Uint8Array): string {
+  const CHUNK = 8192;
+  let binary = "";
+  for (let i = 0; i < bytes.byteLength; i += CHUNK) {
+    binary += String.fromCharCode(
+      ...bytes.subarray(i, Math.min(i + CHUNK, bytes.byteLength))
+    );
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+// ── Path helpers ─────────────────────────────────────────────────────
+
+function escapeLike(s: string): string {
+  return s.replace(/[\\%_]/g, (ch) => "\\" + ch);
+}
+
+function normalizePath(path: string): string {
+  if (!path.startsWith("/")) path = "/" + path;
+  const parts = path.split("/");
+  const resolved: string[] = [];
+  for (const part of parts) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      resolved.pop();
+    } else {
+      resolved.push(part);
+    }
+  }
+  const result = "/" + resolved.join("/");
+  if (result.length > MAX_PATH_LENGTH) {
+    throw new Error(`ENAMETOOLONG: path exceeds ${MAX_PATH_LENGTH} characters`);
+  }
+  return result;
+}
+
+function getParent(path: string): string {
+  const normalized = normalizePath(path);
+  if (normalized === "/") return "";
+  const lastSlash = normalized.lastIndexOf("/");
+  return lastSlash === 0 ? "/" : normalized.slice(0, lastSlash);
+}
+
+function getBasename(path: string): string {
+  const normalized = normalizePath(path);
+  if (normalized === "/") return "";
+  return normalized.slice(normalized.lastIndexOf("/") + 1);
+}
+
+function toFileInfo(r: {
+  path: string;
+  name: string;
+  type: string;
+  mime_type: string;
+  size: number;
+  created_at: number;
+  modified_at: number;
+  target?: string | null;
+}): FileInfo {
+  const info: FileInfo = {
+    path: r.path,
+    name: r.name,
+    type: r.type as EntryType,
+    mimeType: r.mime_type,
+    size: r.size,
+    createdAt: r.created_at * 1000,
+    updatedAt: r.modified_at * 1000
+  };
+  if (r.target) info.target = r.target;
+  return info;
+}
+
+// ── Glob helpers ─────────────────────────────────────────────────────
+
+function getGlobPrefix(pattern: string): string {
+  const first = pattern.search(/[*?[{]/);
+  if (first === -1) return pattern;
+  const before = pattern.slice(0, first);
+  const lastSlash = before.lastIndexOf("/");
+  return lastSlash >= 0 ? before.slice(0, lastSlash + 1) : "/";
+}
+
+function globToRegex(pattern: string): RegExp {
+  let i = 0;
+  let re = "^";
+  while (i < pattern.length) {
+    const ch = pattern[i];
+    if (ch === "*") {
+      if (pattern[i + 1] === "*") {
+        // ** — match everything including /
+        i += 2;
+        if (pattern[i] === "/") {
+          // **/ — zero or more directory segments
+          re += "(?:.+/)?";
+          i++;
+        } else {
+          re += ".*";
+        }
+      } else {
+        // * — match everything except /
+        re += "[^/]*";
+        i++;
+      }
+    } else if (ch === "?") {
+      re += "[^/]";
+      i++;
+    } else if (ch === "[") {
+      // character class — pass through until ]
+      const close = pattern.indexOf("]", i + 1);
+      if (close === -1) {
+        re += "\\[";
+        i++;
+      } else {
+        re += pattern.slice(i, close + 1);
+        i = close + 1;
+      }
+    } else if (ch === "{") {
+      // brace expansion {a,b,c} → (?:a|b|c)
+      const close = pattern.indexOf("}", i + 1);
+      if (close === -1) {
+        re += "\\{";
+        i++;
+      } else {
+        const inner = pattern
+          .slice(i + 1, close)
+          .split(",")
+          .join("|");
+        re += `(?:${inner})`;
+        i = close + 1;
+      }
+    } else {
+      // escape regex special chars
+      re += ch.replace(/[.+^$|\\()]/g, "\\$&");
+      i++;
+    }
+  }
+  re += "$";
+  return new RegExp(re);
+}
+
+// ── Diff helpers ─────────────────────────────────────────────────────
+
+function unifiedDiff(
+  a: string,
+  b: string,
+  labelA: string,
+  labelB: string,
+  contextLines = 3
+): string {
+  if (a === b) return "";
+
+  const linesA = a.split("\n");
+  const linesB = b.split("\n");
+  const edits = myersDiff(linesA, linesB);
+  return formatUnified(edits, linesA, linesB, labelA, labelB, contextLines);
+}
+
+type Edit = {
+  type: "keep" | "delete" | "insert";
+  lineA: number;
+  lineB: number;
+};
+
+function myersDiff(a: string[], b: string[]): Edit[] {
+  const n = a.length;
+  const m = b.length;
+  const max = n + m;
+  const vSize = 2 * max + 1;
+  const v = new Int32Array(vSize);
+  v.fill(-1);
+  const offset = max;
+  v[offset + 1] = 0;
+
+  const trace: Int32Array[] = [];
+
+  outer: for (let d = 0; d <= max; d++) {
+    trace.push(v.slice());
+    for (let k = -d; k <= d; k += 2) {
+      let x: number;
+      if (k === -d || (k !== d && v[offset + k - 1] < v[offset + k + 1])) {
+        x = v[offset + k + 1];
+      } else {
+        x = v[offset + k - 1] + 1;
+      }
+      let y = x - k;
+      while (x < n && y < m && a[x] === b[y]) {
+        x++;
+        y++;
+      }
+      v[offset + k] = x;
+      if (x >= n && y >= m) break outer;
+    }
+  }
+
+  const edits: Edit[] = [];
+  let x = n;
+  let y = m;
+
+  for (let d = trace.length - 1; d >= 0; d--) {
+    const vPrev = trace[d];
+    const k = x - y;
+    let prevK: number;
+    if (
+      k === -d ||
+      (k !== d && vPrev[offset + k - 1] < vPrev[offset + k + 1])
+    ) {
+      prevK = k + 1;
+    } else {
+      prevK = k - 1;
+    }
+    const prevX = vPrev[offset + prevK];
+    const prevY = prevX - prevK;
+
+    while (x > prevX && y > prevY) {
+      x--;
+      y--;
+      edits.push({ type: "keep", lineA: x, lineB: y });
+    }
+    if (d > 0) {
+      if (x === prevX) {
+        edits.push({ type: "insert", lineA: x, lineB: y - 1 });
+        y--;
+      } else {
+        edits.push({ type: "delete", lineA: x - 1, lineB: y });
+        x--;
+      }
+    }
+  }
+
+  edits.reverse();
+  return edits;
+}
+
+function formatUnified(
+  edits: Edit[],
+  linesA: string[],
+  linesB: string[],
+  labelA: string,
+  labelB: string,
+  ctx: number
+): string {
+  const out: string[] = [];
+  out.push(`--- ${labelA}`);
+  out.push(`+++ ${labelB}`);
+
+  const changes: number[] = [];
+  for (let i = 0; i < edits.length; i++) {
+    if (edits[i].type !== "keep") changes.push(i);
+  }
+  if (changes.length === 0) return "";
+
+  let i = 0;
+  while (i < changes.length) {
+    let start = Math.max(0, changes[i] - ctx);
+    let end = Math.min(edits.length - 1, changes[i] + ctx);
+
+    let j = i + 1;
+    while (j < changes.length && changes[j] - ctx <= end + 1) {
+      end = Math.min(edits.length - 1, changes[j] + ctx);
+      j++;
+    }
+
+    let startA = edits[start].lineA;
+    let startB = edits[start].lineB;
+    let countA = 0;
+    let countB = 0;
+    const hunkLines: string[] = [];
+
+    for (let idx = start; idx <= end; idx++) {
+      const e = edits[idx];
+      if (e.type === "keep") {
+        hunkLines.push(` ${linesA[e.lineA]}`);
+        countA++;
+        countB++;
+      } else if (e.type === "delete") {
+        hunkLines.push(`-${linesA[e.lineA]}`);
+        countA++;
+      } else {
+        hunkLines.push(`+${linesB[e.lineB]}`);
+        countB++;
+      }
+    }
+
+    out.push(`@@ -${startA + 1},${countA} +${startB + 1},${countB} @@`);
+    out.push(...hunkLines);
+    i = j;
+  }
+
+  return out.join("\n");
+}
