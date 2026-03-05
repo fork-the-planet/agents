@@ -17,9 +17,9 @@
     "@x402/fetch": "^2.5.0",
     "@x402/hono": "^2.5.0",
     "agents": "*",
-    "hono": "^4.12.4",
+    "hono": "^4.12.5",
     "nanoid": "^5.1.6",
-    "viem": "^2.46.3"
+    "viem": "^2.47.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4",
