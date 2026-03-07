@@ -6,11 +6,10 @@
     "deploy": "vite build && wrangler deploy",
     "dev:wrangler": "wrangler dev",
     "start": "vite",
-    "build": "vite build",
     "types": "wrangler types --include-runtime false"
   },
   "dependencies": {
-    "@cloudflare/vite-plugin": "^1.26.0",
+    "@cloudflare/vite-plugin": "^1.26.1",
     "@vitejs/plugin-react": "^5.1.4",
     "chess.js": "^1.4.0",
     "react": "^19.2.4",
