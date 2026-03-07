@@ -570,7 +570,8 @@ describe("handleAssetRequest — auto-trailing-slash", () => {
     );
     expect(res).not.toBeNull();
     expect(res!.status).toBe(200);
-    expect(await res!.text()).toBe("PNG_DATA");
+    const body = new TextDecoder().decode(await res!.arrayBuffer());
+    expect(body).toBe("PNG_DATA");
   });
 });
 
