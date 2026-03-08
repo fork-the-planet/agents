@@ -1,0 +1,23 @@
+{
+  "name": "@cloudflare/agents-voice-input-example",
+  "description": "Voice-to-text input example using @cloudflare/voice useVoiceInput hook",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "scripts": {
+    "start": "vite dev",
+    "deploy": "vite build && wrangler deploy",
+    "types": "wrangler types env.d.ts --include-runtime false"
+  },
+  "dependencies": {
+    "@cloudflare/agents-ui": "*",
+    "@cloudflare/kumo": "^1.10.0",
+    "@cloudflare/voice": "*",
+    "@phosphor-icons/react": "^2.1.10",
+    "partyserver": "*"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4",
+    "tailwindcss": "^4.2.1"
+  }
+}

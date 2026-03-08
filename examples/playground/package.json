@@ -12,6 +12,7 @@
     "@cloudflare/agents-ui": "*",
     "@cloudflare/ai-chat": "*",
     "@cloudflare/codemode": "*",
+    "@cloudflare/voice": "*",
     "agents": "*",
     "cronstrue": "^3.13.0",
     "nanoid": "^5.1.6",

@@ -23,6 +23,7 @@ import {
   ChatCircleIcon,
   StackIcon,
   GitMergeIcon,
+  MicrophoneIcon,
   ShieldIcon,
   ArrowsClockwiseIcon,
   XIcon
@@ -178,6 +179,17 @@ const navigation: NavCategory[] = [
         label: "Pipeline",
         path: "/multi-agent/pipeline",
         icon: <GitMergeIcon size={16} />
+      }
+    ]
+  },
+  {
+    label: "Voice",
+    icon: <MicrophoneIcon size={16} />,
+    items: [
+      {
+        label: "Voice Chat",
+        path: "/voice/chat",
+        icon: <MicrophoneIcon size={16} />
       }
     ]
   },
