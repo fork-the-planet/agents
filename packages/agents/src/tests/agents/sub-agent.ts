@@ -1,13 +1,10 @@
 import { Agent, callable } from "../../index.ts";
-import { SubAgent, withSubAgents } from "../../experimental/sub-agent.ts";
 import { RpcTarget } from "cloudflare:workers";
-
-const SubAgentParent = withSubAgents(Agent);
 
 // ── SubAgent: Counter ───────────────────────────────────────────────
 // A SubAgent with its own SQLite counter table.
 
-export class CounterSubAgent extends SubAgent {
+export class CounterSubAgent extends Agent {
   onStart() {
     this.sql`
       CREATE TABLE IF NOT EXISTS counter (
@@ -46,12 +43,39 @@ export class CounterSubAgent extends SubAgent {
   getName(): string {
     return this.name;
   }
+
+  async trySchedule(): Promise<string> {
+    try {
+      await this.schedule(1, "ping" as keyof this);
+      return "";
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async tryKeepAlive(): Promise<string> {
+    try {
+      await this.keepAlive();
+      return "";
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async tryCancelSchedule(): Promise<string> {
+    try {
+      await this.cancelSchedule("nonexistent");
+      return "";
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+  }
 }
 
 // ── SubAgent: Inner (for nesting tests) ─────────────────────────────
 // A SubAgent that itself spawns a child SubAgent.
 
-export class InnerSubAgent extends SubAgent {
+export class InnerSubAgent extends Agent {
   onStart() {
     this.sql`
       CREATE TABLE IF NOT EXISTS kv (
@@ -75,7 +99,7 @@ export class InnerSubAgent extends SubAgent {
   }
 }
 
-export class OuterSubAgent extends SubAgent {
+export class OuterSubAgent extends Agent {
   async getInnerValue(innerName: string, key: string): Promise<string | null> {
     const inner = await this.subAgent(InnerSubAgent, innerName);
     return inner.getVal(key);
@@ -99,7 +123,7 @@ export class OuterSubAgent extends SubAgent {
 // A SubAgent that accepts an RpcTarget callback and calls it
 // multiple times to simulate streaming.
 
-export class CallbackSubAgent extends SubAgent {
+export class CallbackSubAgent extends Agent {
   onStart() {
     this.sql`
       CREATE TABLE IF NOT EXISTS log (
@@ -134,7 +158,7 @@ export class CallbackSubAgent extends SubAgent {
 
 // Not exported from worker.ts → not in ctx.exports.
 // Used to test the missing-export error guard.
-class UnexportedSubAgent extends SubAgent {
+class UnexportedSubAgent extends Agent {
   ping(): string {
     return "unreachable";
   }
@@ -142,9 +166,7 @@ class UnexportedSubAgent extends SubAgent {
 
 // ── Parent Agent that manages sub-agents ────────────────────────────
 
-export class TestSubAgentParent extends SubAgentParent<
-  Record<string, unknown>
-> {
+export class TestSubAgentParent extends Agent<Record<string, unknown>> {
   @callable()
   async subAgentPing(subAgentName: string): Promise<string> {
     const child = await this.subAgent(CounterSubAgent, subAgentName);
@@ -168,12 +190,12 @@ export class TestSubAgentParent extends SubAgentParent<
 
   @callable()
   async subAgentAbort(subAgentName: string): Promise<void> {
-    this.abortSubAgent(subAgentName, new Error("test abort"));
+    this.abortSubAgent(CounterSubAgent, subAgentName, new Error("test abort"));
   }
 
   @callable()
   async subAgentDelete(subAgentName: string): Promise<void> {
-    this.deleteSubAgent(subAgentName);
+    this.deleteSubAgent(CounterSubAgent, subAgentName);
   }
 
   @callable()
@@ -208,6 +230,17 @@ export class TestSubAgentParent extends SubAgentParent<
     } catch (e) {
       return { error: e instanceof Error ? e.message : String(e) };
     }
+  }
+
+  @callable()
+  async subAgentSameNameDifferentClass(
+    name: string
+  ): Promise<{ counterPing: string; callbackLog: string[] }> {
+    const counter = await this.subAgent(CounterSubAgent, name);
+    const callback = await this.subAgent(CallbackSubAgent, name);
+    const counterPing = await counter.ping();
+    const callbackLog = await callback.getLog();
+    return { counterPing, callbackLog };
   }
 
   // ── Parent storage isolation tests ────────────────────────────
@@ -267,6 +300,40 @@ export class TestSubAgentParent extends SubAgentParent<
   async nestedPing(outerName: string): Promise<string> {
     const outer = await this.subAgent(OuterSubAgent, outerName);
     return outer.ping();
+  }
+
+  // ── Scheduling guard tests ─────────────────────────────────────────
+
+  @callable()
+  async subAgentTrySchedule(subAgentName: string): Promise<string> {
+    const child = await this.subAgent(CounterSubAgent, subAgentName);
+    return child.trySchedule();
+  }
+
+  @callable()
+  async subAgentTryKeepAlive(subAgentName: string): Promise<string> {
+    const child = await this.subAgent(CounterSubAgent, subAgentName);
+    return child.tryKeepAlive();
+  }
+
+  @callable()
+  async subAgentTryCancelSchedule(subAgentName: string): Promise<string> {
+    const child = await this.subAgent(CounterSubAgent, subAgentName);
+    return child.tryCancelSchedule();
+  }
+
+  @callable()
+  async subAgentTryScheduleAfterAbort(subAgentName: string): Promise<string> {
+    // Create the sub-agent and let it be marked as a facet
+    await this.subAgent(CounterSubAgent, subAgentName);
+
+    // Abort the sub-agent (simulates hibernation — kills the instance)
+    this.abortSubAgent(CounterSubAgent, subAgentName);
+
+    // Re-access: the child restarts fresh. The _isFacet flag must
+    // be restored from storage, not from the in-memory default.
+    const child = await this.subAgent(CounterSubAgent, subAgentName);
+    return child.trySchedule();
   }
 
   // ── Callback streaming tests ──────────────────────────────────────

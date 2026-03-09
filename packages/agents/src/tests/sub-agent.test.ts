@@ -118,6 +118,16 @@ describe("SubAgent", () => {
     expect(error).toMatch(/not found in worker exports/);
   });
 
+  it("should allow same name with different classes", async () => {
+    const name = uniqueName();
+    const agent = await getAgentByName(env.TestSubAgentParent, name);
+
+    const { counterPing, callbackLog } =
+      await agent.subAgentSameNameDifferentClass("shared-name");
+    expect(counterPing).toBe("pong");
+    expect(callbackLog).toEqual([]);
+  });
+
   it("should keep parent and sub-agent storage fully isolated", async () => {
     const name = uniqueName();
     const agent = await getAgentByName(env.TestSubAgentParent, name);
@@ -248,5 +258,39 @@ describe("SubAgent", () => {
       const result = await agent.nestedPing("outer-1");
       expect(result).toBe("outer-pong");
     });
+  });
+
+  it("should throw a clear error when scheduling in a sub-agent", async () => {
+    const name = uniqueName();
+    const agent = await getAgentByName(env.TestSubAgentParent, name);
+
+    const error = await agent.subAgentTrySchedule("sched-guard");
+    expect(error).toMatch(/not supported in sub-agents/);
+  });
+
+  it("should throw a clear error when keepAlive in a sub-agent", async () => {
+    const name = uniqueName();
+    const agent = await getAgentByName(env.TestSubAgentParent, name);
+
+    const error = await agent.subAgentTryKeepAlive("keepalive-guard");
+    expect(error).toMatch(/not supported in sub-agents/);
+  });
+
+  it("should throw a clear error when cancelSchedule in a sub-agent", async () => {
+    const name = uniqueName();
+    const agent = await getAgentByName(env.TestSubAgentParent, name);
+
+    const error = await agent.subAgentTryCancelSchedule("cancel-guard");
+    expect(error).toMatch(/not supported in sub-agents/);
+  });
+
+  it("should preserve the facet flag after abort and re-access", async () => {
+    const name = uniqueName();
+    const agent = await getAgentByName(env.TestSubAgentParent, name);
+
+    // This test aborts the sub-agent (killing the instance) then
+    // re-accesses it. The _isFacet flag must survive via storage.
+    const error = await agent.subAgentTryScheduleAfterAbort("persist-flag");
+    expect(error).toMatch(/not supported in sub-agents/);
   });
 });

@@ -22,12 +22,9 @@
 import { createWorkersAI } from "workers-ai-provider";
 import { Agent, getCurrentAgent, routeAgentRequest, callable } from "agents";
 import type { Connection } from "agents";
-import { SubAgent, withSubAgents } from "agents/experimental/subagent";
 import { streamText, tool, stepCountIs } from "ai";
 import { RpcTarget } from "cloudflare:workers";
 import { z } from "zod";
-
-const SubAgentParent = withSubAgents(Agent);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types (shared with client)
@@ -81,7 +78,7 @@ export type ClientMessage =
 // ChatRoom — sub-agent with isolated SQLite + LLM calls
 // ─────────────────────────────────────────────────────────────────────────────
 
-export class ChatRoom extends SubAgent<Env> {
+export class ChatRoom extends Agent<Env> {
   onStart() {
     this.sql`
       CREATE TABLE IF NOT EXISTS messages (
@@ -257,7 +254,7 @@ class StreamRelay extends RpcTarget {
 // OverseerAgent — room registry + WebSocket router
 // ─────────────────────────────────────────────────────────────────────────────
 
-export class OverseerAgent extends SubAgentParent<Env, RoomsState> {
+export class OverseerAgent extends Agent<Env, RoomsState> {
   initialState: RoomsState = { rooms: [] };
 
   /** Active streams keyed by requestId — used for cancel and resume. */
@@ -403,7 +400,7 @@ export class OverseerAgent extends SubAgentParent<Env, RoomsState> {
   @callable()
   async deleteRoom(roomId: string) {
     this.sql`DELETE FROM rooms WHERE id = ${roomId}`;
-    this.deleteSubAgent(`room-${roomId}`);
+    this.deleteSubAgent(ChatRoom, `room-${roomId}`);
 
     // If the calling connection was viewing this room, clear it
     const connection = this._getConnection();

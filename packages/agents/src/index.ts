@@ -160,6 +160,61 @@ export class SqlError extends Error {
   }
 }
 
+// ── Sub-agent (facet) types ──────────────────────────────────────────
+
+/** @internal */
+interface FacetCapableCtx {
+  facets: {
+    get(
+      name: string,
+      getStartupOptions: () =>
+        | { id?: DurableObjectId | string; class: DurableObjectClass }
+        | Promise<{
+            id?: DurableObjectId | string;
+            class: DurableObjectClass;
+          }>
+    ): Fetcher;
+    abort(name: string, reason: unknown): void;
+    delete(name: string): void;
+  };
+  exports: Record<string, DurableObjectClass>;
+}
+
+/**
+ * Constructor type for a sub-agent class.
+ * Used by {@link Agent.subAgent} to reference the child class
+ * via `ctx.exports`.
+ *
+ * The class name (`cls.name`) must match the export name in the
+ * worker entry point — re-exports under a different name
+ * (e.g. `export { Foo as Bar }`) are not supported.
+ */
+export type SubAgentClass<T extends Agent = Agent> = {
+  new (ctx: DurableObjectState, env: never): T;
+};
+
+/**
+ * Wraps `T` in a `Promise` unless it already is one.
+ */
+type Promisify<T> = T extends Promise<unknown> ? T : Promise<T>;
+
+/**
+ * A typed RPC stub for a sub-agent. Exposes all public instance methods
+ * as callable RPC methods with Promise-wrapped return types.
+ *
+ * Methods inherited from `Agent` / `Server` / `DurableObject` internals
+ * are excluded — only user-defined methods on the subclass are exposed.
+ */
+export type SubAgentStub<T extends Agent> = {
+  [K in keyof T as K extends keyof Agent
+    ? never
+    : T[K] extends (...args: never[]) => unknown
+      ? K
+      : never]: T[K] extends (...args: infer A) => infer R
+    ? (...args: A) => Promisify<R>
+    : never;
+};
+
 /**
  * Decorator that marks a method as callable by clients
  * @param metadata Optional metadata about the callable method
@@ -621,6 +676,9 @@ export class Agent<
    * - "none" → neither hook is overridden, skip entirely
    */
   private _persistenceHookMode: "new" | "old" | "none" = "none";
+
+  /** True when this agent runs as a facet (sub-agent) inside a parent. */
+  private _isFacet = false;
 
   private _ParentClass: typeof Agent<Env, State> =
     Object.getPrototypeOf(this).constructor;
@@ -1257,6 +1315,12 @@ export class Agent<
           email: undefined
         },
         async () => {
+          // Hydrate _isFacet from persistent storage so the flag
+          // survives hibernation (the DO constructor resets it to false).
+          const isFacet =
+            await this.ctx.storage.get<boolean>("cf_agents_is_facet");
+          if (isFacet) this._isFacet = true;
+
           await this._tryCatch(async () => {
             await this.mcp.restoreConnectionsFromStorage(this.name);
             await this._restoreRpcMcpServers();
@@ -2175,6 +2239,12 @@ export class Agent<
     payload?: T,
     options?: { retry?: RetryOptions }
   ): Promise<Schedule<T>> {
+    if (this._isFacet) {
+      throw new Error(
+        "Scheduling is not supported in sub-agents. " +
+          "Schedule from the parent agent instead."
+      );
+    }
     const id = nanoid(9);
 
     if (options?.retry) {
@@ -2309,6 +2379,12 @@ export class Agent<
     payload?: T,
     options?: { retry?: RetryOptions; _idempotent?: boolean }
   ): Promise<Schedule<T>> {
+    if (this._isFacet) {
+      throw new Error(
+        "Scheduling is not supported in sub-agents. " +
+          "Schedule from the parent agent instead."
+      );
+    }
     // DO alarms have a max schedule time of 30 days
     const MAX_INTERVAL_SECONDS = 30 * 24 * 60 * 60; // 30 days in seconds
 
@@ -2477,6 +2553,12 @@ export class Agent<
    * @returns true if the task was cancelled, false if the task was not found
    */
   async cancelSchedule(id: string): Promise<boolean> {
+    if (this._isFacet) {
+      throw new Error(
+        "Scheduling is not supported in sub-agents. " +
+          "Schedule from the parent agent instead."
+      );
+    }
     const schedule = this.getSchedule(id);
     if (!schedule) {
       return false;
@@ -2514,6 +2596,12 @@ export class Agent<
    * ```
    */
   async keepAlive(): Promise<() => void> {
+    if (this._isFacet) {
+      throw new Error(
+        "keepAlive() is not supported in sub-agents. " +
+          "Use keepAlive() from the parent agent instead."
+      );
+    }
     const heartbeatSeconds = Math.ceil(KEEP_ALIVE_INTERVAL_MS / 1000);
     const schedule = await this.scheduleEvery(
       heartbeatSeconds,
@@ -2577,9 +2665,13 @@ export class Agent<
     `;
     if (!result) return;
 
+    let nextTimeMs: number | null = null;
     if (result.length > 0 && "time" in result[0]) {
-      const nextTime = (result[0].time as number) * 1000;
-      await this.ctx.storage.setAlarm(nextTime);
+      nextTimeMs = (result[0].time as number) * 1000;
+    }
+
+    if (nextTimeMs !== null) {
+      await this.ctx.storage.setAlarm(nextTimeMs);
     } else {
       await this.ctx.storage.deleteAlarm();
     }
@@ -2749,6 +2841,124 @@ export class Agent<
     await this._scheduleNextAlarm();
   }
 
+  // ── Sub-agent (facet) management ────────────────────────────────────────
+
+  /**
+   * Marks this agent as running inside a facet (sub-agent). Once set,
+   * scheduling methods throw a clear error instead of crashing on
+   * `setAlarm()` (which is not supported in facets).
+   * @internal
+   */
+  async _cf_markAsFacet(): Promise<void> {
+    this._isFacet = true;
+    await this.ctx.storage.put("cf_agents_is_facet", true);
+  }
+
+  /**
+   * Get or create a named sub-agent — a child Durable Object (facet)
+   * with its own isolated SQLite storage running on the same machine.
+   *
+   * The child class must extend `Agent` and be exported from the worker
+   * entry point. The first call for a given name triggers the child's
+   * `onStart()`. Subsequent calls return the existing instance.
+   *
+   * @experimental Requires the `"experimental"` compatibility flag.
+   *
+   * @param cls The Agent subclass (must be exported from the worker)
+   * @param name Unique name for this child instance
+   * @returns A typed RPC stub for calling methods on the child
+   *
+   * @example
+   * ```typescript
+   * const searcher = await this.subAgent(SearchAgent, "main-search");
+   * const results = await searcher.search("cloudflare agents");
+   * ```
+   */
+  async subAgent<T extends Agent>(
+    cls: SubAgentClass<T>,
+    name: string
+  ): Promise<SubAgentStub<T>> {
+    const ctx = this.ctx as unknown as Partial<FacetCapableCtx>;
+    if (!ctx.facets || !ctx.exports) {
+      throw new Error(
+        'subAgent() requires the "experimental" compatibility flag. ' +
+          "Add it to your wrangler.jsonc compatibility_flags."
+      );
+    }
+    if (!ctx.exports[cls.name]) {
+      throw new Error(
+        `Sub-agent class "${cls.name}" not found in worker exports. ` +
+          `Make sure the class is exported from your worker entry point ` +
+          `and that the export name matches the class name.`
+      );
+    }
+    // Composite key: class name + NUL + facet name, so two different
+    // classes can share the same user-facing name.
+    const facetKey = `${cls.name}\0${name}`;
+    const stub = ctx.facets.get(facetKey, () => ({
+      class: ctx.exports![cls.name] as DurableObjectClass
+    }));
+
+    // Trigger Server initialization (setName → onStart) via fetch,
+    // same pattern as getAgentByName / getServerByName.
+    const req = new Request(
+      "http://dummy-example.cloudflare.com/cdn-cgi/partyserver/set-name/"
+    );
+    req.headers.set("x-partykit-room", name);
+    await stub.fetch(req).then((res) => res.text());
+
+    // Mark the child as a facet so scheduling methods throw
+    // a clear error instead of crashing on setAlarm().
+    await (
+      stub as unknown as { _cf_markAsFacet(): Promise<void> }
+    )._cf_markAsFacet();
+
+    return stub as unknown as SubAgentStub<T>;
+  }
+
+  /**
+   * Forcefully abort a running sub-agent. The child stops executing
+   * immediately and will be restarted on next {@link subAgent} call.
+   * Pending RPC calls receive the reason as an error.
+   * Transitively aborts the child's own children.
+   *
+   * @experimental Requires the `"experimental"` compatibility flag.
+   *
+   * @param cls The Agent subclass used when creating the child
+   * @param name Name of the child to abort
+   * @param reason Error thrown to pending/future RPC callers
+   */
+  abortSubAgent(cls: SubAgentClass, name: string, reason?: unknown): void {
+    const ctx = this.ctx as unknown as Partial<FacetCapableCtx>;
+    if (!ctx.facets) {
+      throw new Error(
+        'abortSubAgent() requires the "experimental" compatibility flag.'
+      );
+    }
+    const facetKey = `${cls.name}\0${name}`;
+    ctx.facets.abort(facetKey, reason);
+  }
+
+  /**
+   * Delete a sub-agent: abort it if running, then permanently wipe its
+   * storage. Transitively deletes the child's own children.
+   *
+   * @experimental Requires the `"experimental"` compatibility flag.
+   *
+   * @param cls The Agent subclass used when creating the child
+   * @param name Name of the child to delete
+   */
+  deleteSubAgent(cls: SubAgentClass, name: string): void {
+    const ctx = this.ctx as unknown as Partial<FacetCapableCtx>;
+    if (!ctx.facets) {
+      throw new Error(
+        'deleteSubAgent() requires the "experimental" compatibility flag.'
+      );
+    }
+    const facetKey = `${cls.name}\0${name}`;
+    ctx.facets.delete(facetKey);
+  }
+
   /**
    * Destroy the Agent, removing all state and scheduled tasks
    */
@@ -2761,7 +2971,9 @@ export class Agent<
     this.sql`DROP TABLE IF EXISTS cf_agents_workflows`;
 
     // delete all alarms
-    await this.ctx.storage.deleteAlarm();
+    if (!this._isFacet) {
+      await this.ctx.storage.deleteAlarm();
+    }
     await this.ctx.storage.deleteAll();
 
     this._disposables.dispose();
