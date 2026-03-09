@@ -1,9 +1,4 @@
-import {
-  zodToTs,
-  printNode as printNodeZodToTs,
-  createTypeAlias,
-  createAuxiliaryTypeStore
-} from "zod-to-ts";
+import { asSchema } from "ai";
 import type { ZodType } from "zod";
 import type { ToolSet } from "ai";
 import type { JSONSchema7, JSONSchema7Definition } from "json-schema";
@@ -147,6 +142,19 @@ function isZodSchema(value: unknown): value is ZodType {
     typeof value === "object" &&
     "_zod" in value &&
     (value as { _zod?: unknown })._zod !== undefined
+  );
+}
+
+/**
+ * Check if a value conforms to the Standard Schema protocol (~standard).
+ * This catches Zod v3 schemas (which expose ~standard but not _zod).
+ */
+function isStandardSchema(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "~standard" in value &&
+    (value as Record<string, unknown>)["~standard"] !== undefined
   );
 }
 
@@ -319,196 +327,202 @@ function jsonSchemaToTypeString(
   // Circular reference guard
   if (ctx.seen.has(schema)) return "unknown";
 
+  ctx.seen.add(schema);
   const nextCtx: ConversionContext = {
     ...ctx,
-    depth: ctx.depth + 1,
-    seen: new Set([...ctx.seen, schema])
+    depth: ctx.depth + 1
   };
 
-  // Handle $ref
-  if (schema.$ref) {
-    const resolved = resolveRef(schema.$ref, ctx.root);
-    if (!resolved) return "unknown";
-    return applyNullable(
-      jsonSchemaToTypeString(resolved, indent, nextCtx),
-      schema
-    );
-  }
+  try {
+    // Handle $ref
+    if (schema.$ref) {
+      const resolved = resolveRef(schema.$ref, ctx.root);
+      if (!resolved) return "unknown";
+      return applyNullable(
+        jsonSchemaToTypeString(resolved, indent, nextCtx),
+        schema
+      );
+    }
 
-  // Handle anyOf/oneOf (union types)
-  if (schema.anyOf) {
-    const types = schema.anyOf.map((s) =>
-      jsonSchemaToTypeString(s, indent, nextCtx)
-    );
-    return applyNullable(types.join(" | "), schema);
-  }
-  if (schema.oneOf) {
-    const types = schema.oneOf.map((s) =>
-      jsonSchemaToTypeString(s, indent, nextCtx)
-    );
-    return applyNullable(types.join(" | "), schema);
-  }
-
-  // Handle allOf (intersection types)
-  if (schema.allOf) {
-    const types = schema.allOf.map((s) =>
-      jsonSchemaToTypeString(s, indent, nextCtx)
-    );
-    return applyNullable(types.join(" & "), schema);
-  }
-
-  // Handle enum
-  if (schema.enum) {
-    if (schema.enum.length === 0) return "never";
-    const result = schema.enum
-      .map((v) => {
-        if (v === null) return "null";
-        if (typeof v === "string") return '"' + escapeStringLiteral(v) + '"';
-        if (typeof v === "object") return JSON.stringify(v) ?? "unknown";
-        return String(v);
-      })
-      .join(" | ");
-    return applyNullable(result, schema);
-  }
-
-  // Handle const
-  if (schema.const !== undefined) {
-    const result =
-      schema.const === null
-        ? "null"
-        : typeof schema.const === "string"
-          ? '"' + escapeStringLiteral(schema.const) + '"'
-          : typeof schema.const === "object"
-            ? (JSON.stringify(schema.const) ?? "unknown")
-            : String(schema.const);
-    return applyNullable(result, schema);
-  }
-
-  // Handle type
-  const type = schema.type;
-
-  if (type === "string") return applyNullable("string", schema);
-  if (type === "number" || type === "integer")
-    return applyNullable("number", schema);
-  if (type === "boolean") return applyNullable("boolean", schema);
-  if (type === "null") return "null";
-
-  if (type === "array") {
-    // Tuple support: prefixItems (JSON Schema 2020-12)
-    const prefixItems = (schema as Record<string, unknown>)
-      .prefixItems as JSONSchema7Definition[];
-    if (Array.isArray(prefixItems)) {
-      const types = prefixItems.map((s) =>
+    // Handle anyOf/oneOf (union types)
+    if (schema.anyOf) {
+      const types = schema.anyOf.map((s) =>
         jsonSchemaToTypeString(s, indent, nextCtx)
       );
-      return applyNullable(`[${types.join(", ")}]`, schema);
+      return applyNullable(types.join(" | "), schema);
     }
-
-    // Tuple support: items as array (draft-07)
-    if (Array.isArray(schema.items)) {
-      const types = schema.items.map((s) =>
+    if (schema.oneOf) {
+      const types = schema.oneOf.map((s) =>
         jsonSchemaToTypeString(s, indent, nextCtx)
       );
-      return applyNullable(`[${types.join(", ")}]`, schema);
+      return applyNullable(types.join(" | "), schema);
     }
 
-    if (schema.items) {
-      const itemType = jsonSchemaToTypeString(schema.items, indent, nextCtx);
-      return applyNullable(`${itemType}[]`, schema);
+    // Handle allOf (intersection types)
+    if (schema.allOf) {
+      const types = schema.allOf.map((s) =>
+        jsonSchemaToTypeString(s, indent, nextCtx)
+      );
+      return applyNullable(types.join(" & "), schema);
     }
-    return applyNullable("unknown[]", schema);
-  }
 
-  if (type === "object" || schema.properties) {
-    const props = schema.properties || {};
-    const required = new Set(schema.required || []);
-    const lines: string[] = [];
+    // Handle enum
+    if (schema.enum) {
+      if (schema.enum.length === 0) return "never";
+      const result = schema.enum
+        .map((v) => {
+          if (v === null) return "null";
+          if (typeof v === "string") return '"' + escapeStringLiteral(v) + '"';
+          if (typeof v === "object") return JSON.stringify(v) ?? "unknown";
+          return String(v);
+        })
+        .join(" | ");
+      return applyNullable(result, schema);
+    }
 
-    for (const [propName, propSchema] of Object.entries(props)) {
-      if (typeof propSchema === "boolean") {
-        const boolType = propSchema ? "unknown" : "never";
-        const optionalMark = required.has(propName) ? "" : "?";
-        lines.push(
-          `${indent}    ${quoteProp(propName)}${optionalMark}: ${boolType};`
+    // Handle const
+    if (schema.const !== undefined) {
+      const result =
+        schema.const === null
+          ? "null"
+          : typeof schema.const === "string"
+            ? '"' + escapeStringLiteral(schema.const) + '"'
+            : typeof schema.const === "object"
+              ? (JSON.stringify(schema.const) ?? "unknown")
+              : String(schema.const);
+      return applyNullable(result, schema);
+    }
+
+    // Handle type
+    const type = schema.type;
+
+    if (type === "string") return applyNullable("string", schema);
+    if (type === "number" || type === "integer")
+      return applyNullable("number", schema);
+    if (type === "boolean") return applyNullable("boolean", schema);
+    if (type === "null") return "null";
+
+    if (type === "array") {
+      // Tuple support: prefixItems (JSON Schema 2020-12)
+      const prefixItems = (schema as Record<string, unknown>)
+        .prefixItems as JSONSchema7Definition[];
+      if (Array.isArray(prefixItems)) {
+        const types = prefixItems.map((s) =>
+          jsonSchemaToTypeString(s, indent, nextCtx)
         );
-        continue;
+        return applyNullable(`[${types.join(", ")}]`, schema);
       }
 
-      const isRequired = required.has(propName);
-      const propType = jsonSchemaToTypeString(
-        propSchema,
-        indent + "    ",
-        nextCtx
-      );
-      const desc = propSchema.description;
-      const format = propSchema.format;
+      // Tuple support: items as array (draft-07)
+      if (Array.isArray(schema.items)) {
+        const types = schema.items.map((s) =>
+          jsonSchemaToTypeString(s, indent, nextCtx)
+        );
+        return applyNullable(`[${types.join(", ")}]`, schema);
+      }
 
-      if (desc || format) {
-        const descText = desc
-          ? escapeJsDoc(desc.replace(/\r?\n/g, " "))
-          : undefined;
-        const formatTag = format ? `@format ${escapeJsDoc(format)}` : undefined;
+      if (schema.items) {
+        const itemType = jsonSchemaToTypeString(schema.items, indent, nextCtx);
+        return applyNullable(`${itemType}[]`, schema);
+      }
+      return applyNullable("unknown[]", schema);
+    }
 
-        if (descText && formatTag) {
-          // Multi-line JSDoc when both description and format are present
-          lines.push(`${indent}    /**`);
-          lines.push(`${indent}     * ${descText}`);
-          lines.push(`${indent}     * ${formatTag}`);
-          lines.push(`${indent}     */`);
-        } else {
-          lines.push(`${indent}    /** ${descText ?? formatTag} */`);
+    if (type === "object" || schema.properties) {
+      const props = schema.properties || {};
+      const required = new Set(schema.required || []);
+      const lines: string[] = [];
+
+      for (const [propName, propSchema] of Object.entries(props)) {
+        if (typeof propSchema === "boolean") {
+          const boolType = propSchema ? "unknown" : "never";
+          const optionalMark = required.has(propName) ? "" : "?";
+          lines.push(
+            `${indent}    ${quoteProp(propName)}${optionalMark}: ${boolType};`
+          );
+          continue;
         }
+
+        const isRequired = required.has(propName);
+        const propType = jsonSchemaToTypeString(
+          propSchema,
+          indent + "    ",
+          nextCtx
+        );
+        const desc = propSchema.description;
+        const format = propSchema.format;
+
+        if (desc || format) {
+          const descText = desc
+            ? escapeJsDoc(desc.replace(/\r?\n/g, " "))
+            : undefined;
+          const formatTag = format
+            ? `@format ${escapeJsDoc(format)}`
+            : undefined;
+
+          if (descText && formatTag) {
+            // Multi-line JSDoc when both description and format are present
+            lines.push(`${indent}    /**`);
+            lines.push(`${indent}     * ${descText}`);
+            lines.push(`${indent}     * ${formatTag}`);
+            lines.push(`${indent}     */`);
+          } else {
+            lines.push(`${indent}    /** ${descText ?? formatTag} */`);
+          }
+        }
+
+        const quotedName = quoteProp(propName);
+        const optionalMark = isRequired ? "" : "?";
+        lines.push(`${indent}    ${quotedName}${optionalMark}: ${propType};`);
       }
 
-      const quotedName = quoteProp(propName);
-      const optionalMark = isRequired ? "" : "?";
-      lines.push(`${indent}    ${quotedName}${optionalMark}: ${propType};`);
-    }
-
-    // Handle additionalProperties
-    // NOTE: In TypeScript, an index signature [key: string]: T requires all
-    // named properties to be assignable to T. If any named property has an
-    // incompatible type, the generated type is invalid. We emit it anyway
-    // since it's more informative for LLMs consuming these types.
-    if (schema.additionalProperties) {
-      const valueType =
-        schema.additionalProperties === true
-          ? "unknown"
-          : jsonSchemaToTypeString(
-              schema.additionalProperties,
-              indent + "    ",
-              nextCtx
-            );
-      lines.push(`${indent}    [key: string]: ${valueType};`);
-    }
-
-    if (lines.length === 0) {
-      // additionalProperties: false means no keys allowed → empty object
-      if (schema.additionalProperties === false) {
-        return applyNullable("{}", schema);
+      // Handle additionalProperties
+      // NOTE: In TypeScript, an index signature [key: string]: T requires all
+      // named properties to be assignable to T. If any named property has an
+      // incompatible type, the generated type is invalid. We emit it anyway
+      // since it's more informative for LLMs consuming these types.
+      if (schema.additionalProperties) {
+        const valueType =
+          schema.additionalProperties === true
+            ? "unknown"
+            : jsonSchemaToTypeString(
+                schema.additionalProperties,
+                indent + "    ",
+                nextCtx
+              );
+        lines.push(`${indent}    [key: string]: ${valueType};`);
       }
-      return applyNullable("Record<string, unknown>", schema);
+
+      if (lines.length === 0) {
+        // additionalProperties: false means no keys allowed → empty object
+        if (schema.additionalProperties === false) {
+          return applyNullable("{}", schema);
+        }
+        return applyNullable("Record<string, unknown>", schema);
+      }
+
+      const result = `{\n${lines.join("\n")}\n${indent}}`;
+      return applyNullable(result, schema);
     }
 
-    const result = `{\n${lines.join("\n")}\n${indent}}`;
-    return applyNullable(result, schema);
-  }
+    // Handle array of types (e.g., ["string", "null"])
+    if (Array.isArray(type)) {
+      const types = type.map((t) => {
+        if (t === "string") return "string";
+        if (t === "number" || t === "integer") return "number";
+        if (t === "boolean") return "boolean";
+        if (t === "null") return "null";
+        if (t === "array") return "unknown[]";
+        if (t === "object") return "Record<string, unknown>";
+        return "unknown";
+      });
+      return applyNullable(types.join(" | "), schema);
+    }
 
-  // Handle array of types (e.g., ["string", "null"])
-  if (Array.isArray(type)) {
-    const types = type.map((t) => {
-      if (t === "string") return "string";
-      if (t === "number" || t === "integer") return "number";
-      if (t === "boolean") return "boolean";
-      if (t === "null") return "null";
-      if (t === "array") return "unknown[]";
-      if (t === "object") return "Record<string, unknown>";
-      return "unknown";
-    });
-    return applyNullable(types.join(" | "), schema);
+    return "unknown";
+  } finally {
+    ctx.seen.delete(schema);
   }
-
-  return "unknown";
 }
 
 /**
@@ -536,9 +550,13 @@ function extractDescriptions(schema: unknown): Record<string, string> {
   const shape = (schema as { shape?: Record<string, ZodType> }).shape;
   if (shape && typeof shape === "object") {
     for (const [fieldName, fieldSchema] of Object.entries(shape)) {
-      const desc = (fieldSchema as { description?: string }).description;
-      if (desc) {
-        descriptions[fieldName] = desc;
+      // Unwrap optional/nullable/default wrappers to find .description
+      let s = fieldSchema as { description?: string; unwrap?: () => unknown };
+      while (!s.description && typeof s.unwrap === "function") {
+        s = s.unwrap() as typeof s;
+      }
+      if (s.description) {
+        descriptions[fieldName] = s.description;
       }
     }
     return descriptions;
@@ -567,19 +585,26 @@ function extractDescriptions(schema: unknown): Record<string, string> {
 
 /**
  * Safely convert a schema to TypeScript type string.
- * Handles Zod schemas and AI SDK jsonSchema wrappers.
+ * Handles Zod schemas (v3/v4) and AI SDK jsonSchema wrappers.
  * Returns "unknown" if the schema cannot be represented in TypeScript.
  */
-function safeSchemaToTs(
-  schema: unknown,
-  typeName: string,
-  auxiliaryTypeStore: ReturnType<typeof createAuxiliaryTypeStore>
-): string {
+function safeSchemaToTs(schema: unknown, typeName: string): string {
   try {
-    // For Zod schemas, use zod-to-ts
-    if (isZodSchema(schema)) {
-      const result = zodToTs(schema, { auxiliaryTypeStore });
-      return printNodeZodToTs(createTypeAlias(result.node, typeName));
+    // For Zod schemas (v4 via _zod, v3 via ~standard), convert to JSON Schema
+    // via AI SDK's asSchema() then use jsonSchemaToTypeString()
+    if (isZodSchema(schema) || isStandardSchema(schema)) {
+      const wrapped = asSchema(schema as ZodType);
+      const jsonSchema = wrapped.jsonSchema as JSONSchema7;
+      if (jsonSchema) {
+        const ctx: ConversionContext = {
+          root: jsonSchema,
+          depth: 0,
+          seen: new Set(),
+          maxDepth: 20
+        };
+        const typeBody = jsonSchemaToTypeString(jsonSchema, "", ctx);
+        return `type ${typeName} = ${typeBody}`;
+      }
     }
 
     // For JSON Schema wrapper, convert directly to TypeScript
@@ -612,8 +637,6 @@ export function generateTypes(tools: ToolDescriptors | ToolSet): string {
   let availableTools = "";
   let availableTypes = "";
 
-  const auxiliaryTypeStore = createAuxiliaryTypeStore();
-
   for (const [toolName, tool] of Object.entries(tools)) {
     const safeName = sanitizeToolName(toolName);
     const camelName = toCamelCase(safeName);
@@ -626,14 +649,10 @@ export function generateTypes(tools: ToolDescriptors | ToolSet): string {
         "outputSchema" in tool ? tool.outputSchema : undefined;
       const description = tool.description;
 
-      const inputType = safeSchemaToTs(
-        inputSchema,
-        `${camelName}Input`,
-        auxiliaryTypeStore
-      );
+      const inputType = safeSchemaToTs(inputSchema, `${camelName}Input`);
 
       const outputType = outputSchema
-        ? safeSchemaToTs(outputSchema, `${camelName}Output`, auxiliaryTypeStore)
+        ? safeSchemaToTs(outputSchema, `${camelName}Output`)
         : `type ${camelName}Output = unknown`;
 
       availableTypes += `\n${inputType.trim()}`;
