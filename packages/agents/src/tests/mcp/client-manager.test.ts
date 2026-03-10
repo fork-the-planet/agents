@@ -2930,22 +2930,31 @@ describe("MCPClientManager OAuth Integration", () => {
   });
 
   describe("SSRF URL validation", () => {
-    it("should reject localhost URLs", async () => {
+    it("should allow localhost URLs with ports for local development", async () => {
       await expect(
         manager.registerServer("s1", {
           url: "http://localhost:8080/mcp",
-          name: "bad"
+          name: "local"
         })
-      ).rejects.toThrow("Blocked URL");
+      ).resolves.toBe("s1");
     });
 
-    it("should reject 127.x.x.x loopback URLs", async () => {
+    it("should allow 127.0.0.1 loopback URLs", async () => {
       await expect(
         manager.registerServer("s2", {
           url: "http://127.0.0.1/mcp",
-          name: "bad"
+          name: "local-loopback"
         })
-      ).rejects.toThrow("Blocked URL");
+      ).resolves.toBe("s2");
+    });
+
+    it("should allow other 127.x.x.x loopback URLs with custom ports", async () => {
+      await expect(
+        manager.registerServer("s2b", {
+          url: "http://127.12.34.56:9999/mcp",
+          name: "local-loopback-port"
+        })
+      ).resolves.toBe("s2b");
     });
 
     it("should reject RFC 1918 10.x.x.x URLs", async () => {
@@ -3002,13 +3011,13 @@ describe("MCPClientManager OAuth Integration", () => {
       ).rejects.toThrow("Blocked URL");
     });
 
-    it("should reject IPv6 loopback", async () => {
+    it("should allow IPv6 loopback", async () => {
       await expect(
         manager.registerServer("s9", {
           url: "http://[::1]:8080/mcp",
-          name: "bad"
+          name: "local-ipv6"
         })
-      ).rejects.toThrow("Blocked URL");
+      ).resolves.toBe("s9");
     });
 
     it("should reject IPv6 unique local (fc00::/7) URLs", async () => {
@@ -3033,6 +3042,42 @@ describe("MCPClientManager OAuth Integration", () => {
       await expect(
         manager.registerServer("s-fe80", {
           url: "http://[fe80::1%25eth0]:8080/mcp",
+          name: "bad"
+        })
+      ).rejects.toThrow("Blocked URL");
+    });
+
+    it("should reject IPv4-mapped IPv6 RFC 1918 10.x (hex form)", async () => {
+      await expect(
+        manager.registerServer("s-mapped-10", {
+          url: "http://[::ffff:a00:1]/mcp",
+          name: "bad"
+        })
+      ).rejects.toThrow("Blocked URL");
+    });
+
+    it("should reject IPv4-mapped IPv6 RFC 1918 192.168.x (hex form)", async () => {
+      await expect(
+        manager.registerServer("s-mapped-192", {
+          url: "http://[::ffff:c0a8:101]/mcp",
+          name: "bad"
+        })
+      ).rejects.toThrow("Blocked URL");
+    });
+
+    it("should reject IPv4-mapped IPv6 RFC 1918 172.16.x (hex form)", async () => {
+      await expect(
+        manager.registerServer("s-mapped-172", {
+          url: "http://[::ffff:ac10:1]/mcp",
+          name: "bad"
+        })
+      ).rejects.toThrow("Blocked URL");
+    });
+
+    it("should reject IPv4-mapped IPv6 metadata endpoint (hex form)", async () => {
+      await expect(
+        manager.registerServer("s-mapped-meta", {
+          url: "http://[::ffff:a9fe:a9fe]/mcp",
           name: "bad"
         })
       ).rejects.toThrow("Blocked URL");
