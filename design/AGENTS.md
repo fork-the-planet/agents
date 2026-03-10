@@ -71,6 +71,7 @@ Keep it concise. A few paragraphs is fine. These are records, not essays.
 
 | File                      | Type       | Scope                                                                        |
 | ------------------------- | ---------- | ---------------------------------------------------------------------------- |
+| `think.md`                | design doc | Think — chat agent base class, sessions, streaming, tools, execution ladder  |
 | `readonly-connections.md` | design doc | Readonly connections — enforcement, storage wrapping, caveats                |
 | `retries.md`              | design doc | Retry system — primitives, integration points, backoff strategy, tradeoffs   |
 | `visuals.md`              | design doc | UI component library (Kumo), dark mode, custom patterns, routing integration |
