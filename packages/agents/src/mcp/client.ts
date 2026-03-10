@@ -36,19 +36,19 @@ const defaultClientOptions: ConstructorParameters<typeof Client>[1] = {
 
 /**
  * Blocked hostname patterns for SSRF protection.
- * Prevents MCP client from connecting to internal/private network addresses.
+ * Prevents MCP client from connecting to internal/private network addresses
+ * while allowing loopback hosts for local development.
  */
 const BLOCKED_HOSTNAMES = new Set([
-  "localhost",
   "0.0.0.0",
-  "[::1]",
   "[::]",
   "metadata.google.internal"
 ]);
 
 /**
  * Check whether a hostname looks like a private/internal IP address.
- * Blocks RFC 1918, link-local, loopback, and cloud metadata endpoints.
+ * Blocks RFC 1918, link-local, unique-local, unspecified,
+ * and cloud metadata endpoints.
  */
 function isBlockedUrl(url: string): boolean {
   let parsed: URL;
@@ -72,8 +72,6 @@ function isBlockedUrl(url: string): boolean {
     if (a === 172 && b >= 16 && b <= 31) return true;
     // 192.168.0.0/16
     if (a === 192 && b === 168) return true;
-    // 127.0.0.0/8 (loopback)
-    if (a === 127) return true;
     // 169.254.0.0/16 (link-local / cloud metadata)
     if (a === 169 && b === 254) return true;
     // 0.0.0.0/8

@@ -2930,22 +2930,31 @@ describe("MCPClientManager OAuth Integration", () => {
   });
 
   describe("SSRF URL validation", () => {
-    it("should reject localhost URLs", async () => {
+    it("should allow localhost URLs with ports for local development", async () => {
       await expect(
         manager.registerServer("s1", {
           url: "http://localhost:8080/mcp",
-          name: "bad"
+          name: "local"
         })
-      ).rejects.toThrow("Blocked URL");
+      ).resolves.toBe("s1");
     });
 
-    it("should reject 127.x.x.x loopback URLs", async () => {
+    it("should allow 127.0.0.1 loopback URLs", async () => {
       await expect(
         manager.registerServer("s2", {
           url: "http://127.0.0.1/mcp",
-          name: "bad"
+          name: "local-loopback"
         })
-      ).rejects.toThrow("Blocked URL");
+      ).resolves.toBe("s2");
+    });
+
+    it("should allow other 127.x.x.x loopback URLs with custom ports", async () => {
+      await expect(
+        manager.registerServer("s2b", {
+          url: "http://127.12.34.56:9999/mcp",
+          name: "local-loopback-port"
+        })
+      ).resolves.toBe("s2b");
     });
 
     it("should reject RFC 1918 10.x.x.x URLs", async () => {
@@ -3002,13 +3011,13 @@ describe("MCPClientManager OAuth Integration", () => {
       ).rejects.toThrow("Blocked URL");
     });
 
-    it("should reject IPv6 loopback", async () => {
+    it("should allow IPv6 loopback", async () => {
       await expect(
         manager.registerServer("s9", {
           url: "http://[::1]:8080/mcp",
-          name: "bad"
+          name: "local-ipv6"
         })
-      ).rejects.toThrow("Blocked URL");
+      ).resolves.toBe("s9");
     });
 
     it("should reject IPv6 unique local (fc00::/7) URLs", async () => {

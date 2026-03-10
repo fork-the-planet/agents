@@ -116,11 +116,14 @@ These options are persisted and used when reconnecting after hibernation or afte
 MCP server URLs are validated before connection to prevent Server-Side Request Forgery (SSRF). The following URL targets are blocked:
 
 - Private/internal IP ranges (RFC 1918: `10.x`, `172.16-31.x`, `192.168.x`)
-- Loopback addresses (`127.x`, `::1`)
+- Unspecified addresses (`0.0.0.0`, `::`)
 - Link-local addresses (`169.254.x`, `fe80::`)
 - Cloud metadata endpoints (`169.254.169.254`)
+- IPv6 unique-local addresses (`fc00::/7`)
 
-If you need to connect to an internal MCP server, use the [RPC transport](./mcp-transports.md) with a Durable Object binding instead of HTTP.
+Loopback development URLs such as `localhost`, `127.0.0.1`, and `::1` are allowed.
+
+If you need to connect to another internal MCP server, use the [RPC transport](./mcp-transports.md) with a Durable Object binding instead of HTTP.
 
 ### Return Value
 
