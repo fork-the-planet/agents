@@ -1,0 +1,88 @@
+{
+  "name": "@cloudflare/think",
+  "description": "Opinionated assistant agent with session management, workspace tools, and extensions",
+  "keywords": [
+    "cloudflare",
+    "agents",
+    "ai",
+    "assistant",
+    "tools"
+  ],
+  "type": "module",
+  "version": "0.0.1",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "directory": "packages/think",
+    "type": "git",
+    "url": "git+https://github.com/cloudflare/agents.git"
+  },
+  "author": "Cloudflare Inc.",
+  "bugs": {
+    "url": "https://github.com/cloudflare/agents/issues"
+  },
+  "devDependencies": {
+    "ai": "^6.0.116",
+    "just-bash": "^2.12.3",
+    "zod": "^4.3.6"
+  },
+  "peerDependencies": {
+    "@cloudflare/codemode": ">=0.0.7 <1.0.0",
+    "agents": ">=0.7.0 <1.0.0",
+    "ai": "^6.0.0",
+    "just-bash": "^2.11.0",
+    "zod": "^3.25.0 || ^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@cloudflare/codemode": {
+      "optional": true
+    },
+    "just-bash": {
+      "optional": true
+    }
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/think.d.ts",
+      "import": "./dist/think.js"
+    },
+    "./session": {
+      "types": "./dist/session/index.d.ts",
+      "import": "./dist/session/index.js"
+    },
+    "./extensions": {
+      "types": "./dist/extensions/index.d.ts",
+      "import": "./dist/extensions/index.js"
+    },
+    "./tools/workspace": {
+      "types": "./dist/tools/workspace.d.ts",
+      "import": "./dist/tools/workspace.js"
+    },
+    "./message-builder": {
+      "types": "./dist/message-builder.d.ts",
+      "import": "./dist/message-builder.js"
+    },
+    "./transport": {
+      "types": "./dist/transport.d.ts",
+      "import": "./dist/transport.js"
+    },
+    "./tools/execute": {
+      "types": "./dist/tools/execute.d.ts",
+      "import": "./dist/tools/execute.js"
+    },
+    "./tools/extensions": {
+      "types": "./dist/tools/extensions.d.ts",
+      "import": "./dist/tools/extensions.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsx ./scripts/build.ts",
+    "test": "vitest --run -c src/tests/vitest.config.ts",
+    "test:workers": "vitest --run -c src/tests/vitest.config.ts",
+    "test:e2e": "vitest --run -c src/e2e-tests/vitest.config.ts"
+  }
+}

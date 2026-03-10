@@ -7,22 +7,18 @@ async function main() {
     dts: true,
     target: "es2021",
     entry: [
-      "src/*.ts",
-      "src/*.tsx",
-      "src/cli/index.ts",
-      "src/mcp/index.ts",
-      "src/mcp/client.ts",
-      "src/mcp/do-oauth-client-provider.ts",
-      "src/mcp/x402.ts",
-      "src/observability/index.ts",
-      "src/codemode/ai.ts",
-      "src/experimental/forever.ts",
-      "src/experimental/memory/session/index.ts",
-      "src/experimental/workspace.ts"
+      "src/think.ts",
+      "src/session/index.ts",
+      "src/extensions/index.ts",
+      "src/tools/workspace.ts",
+      "src/tools/execute.ts",
+      "src/tools/extensions.ts",
+      "src/message-builder.ts",
+      "src/transport.ts"
     ],
     deps: {
       skipNodeModulesBundle: true,
-      neverBundle: ["cloudflare:workers", "cloudflare:email"]
+      neverBundle: ["cloudflare:workers"]
     },
     format: "esm",
     sourcemap: true,
@@ -30,7 +26,7 @@ async function main() {
   });
 
   // then run oxfmt on the generated .d.ts files
-  execSync("oxfmt --write ./dist/*.d.ts");
+  execSync("oxfmt --write './dist/**/*.d.ts'");
 
   process.exit(0);
 }
