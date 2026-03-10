@@ -3047,6 +3047,42 @@ describe("MCPClientManager OAuth Integration", () => {
       ).rejects.toThrow("Blocked URL");
     });
 
+    it("should reject IPv4-mapped IPv6 RFC 1918 10.x (hex form)", async () => {
+      await expect(
+        manager.registerServer("s-mapped-10", {
+          url: "http://[::ffff:a00:1]/mcp",
+          name: "bad"
+        })
+      ).rejects.toThrow("Blocked URL");
+    });
+
+    it("should reject IPv4-mapped IPv6 RFC 1918 192.168.x (hex form)", async () => {
+      await expect(
+        manager.registerServer("s-mapped-192", {
+          url: "http://[::ffff:c0a8:101]/mcp",
+          name: "bad"
+        })
+      ).rejects.toThrow("Blocked URL");
+    });
+
+    it("should reject IPv4-mapped IPv6 RFC 1918 172.16.x (hex form)", async () => {
+      await expect(
+        manager.registerServer("s-mapped-172", {
+          url: "http://[::ffff:ac10:1]/mcp",
+          name: "bad"
+        })
+      ).rejects.toThrow("Blocked URL");
+    });
+
+    it("should reject IPv4-mapped IPv6 metadata endpoint (hex form)", async () => {
+      await expect(
+        manager.registerServer("s-mapped-meta", {
+          url: "http://[::ffff:a9fe:a9fe]/mcp",
+          name: "bad"
+        })
+      ).rejects.toThrow("Blocked URL");
+    });
+
     it("should allow valid public URLs", async () => {
       // This will fail at the connection level (no real server),
       // but should NOT throw a "Blocked URL" error

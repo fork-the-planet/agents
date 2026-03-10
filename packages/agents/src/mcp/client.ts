@@ -46,9 +46,28 @@ const BLOCKED_HOSTNAMES = new Set([
 ]);
 
 /**
+ * Check whether four IPv4 octets belong to a private/reserved range.
+ * Blocks RFC 1918, link-local, cloud metadata, and unspecified addresses.
+ */
+function isPrivateIPv4(octets: number[]): boolean {
+  const [a, b] = octets;
+  // 10.0.0.0/8
+  if (a === 10) return true;
+  // 172.16.0.0/12
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  // 192.168.0.0/16
+  if (a === 192 && b === 168) return true;
+  // 169.254.0.0/16 (link-local / cloud metadata)
+  if (a === 169 && b === 254) return true;
+  // 0.0.0.0/8
+  if (a === 0) return true;
+  return false;
+}
+
+/**
  * Check whether a hostname looks like a private/internal IP address.
  * Blocks RFC 1918, link-local, unique-local, unspecified,
- * and cloud metadata endpoints.
+ * and cloud metadata endpoints. Also detects IPv4-mapped IPv6 addresses.
  */
 function isBlockedUrl(url: string): boolean {
   let parsed: URL;
@@ -65,17 +84,7 @@ function isBlockedUrl(url: string): boolean {
   // IPv4 checks
   const ipv4Parts = hostname.split(".");
   if (ipv4Parts.length === 4 && ipv4Parts.every((p) => /^\d{1,3}$/.test(p))) {
-    const [a, b] = ipv4Parts.map(Number);
-    // 10.0.0.0/8
-    if (a === 10) return true;
-    // 172.16.0.0/12
-    if (a === 172 && b >= 16 && b <= 31) return true;
-    // 192.168.0.0/16
-    if (a === 192 && b === 168) return true;
-    // 169.254.0.0/16 (link-local / cloud metadata)
-    if (a === 169 && b === 254) return true;
-    // 0.0.0.0/8
-    if (a === 0) return true;
+    if (isPrivateIPv4(ipv4Parts.map(Number))) return true;
   }
 
   // IPv6 private range checks
@@ -86,6 +95,29 @@ function isBlockedUrl(url: string): boolean {
     if (addr.startsWith("fc") || addr.startsWith("fd")) return true;
     // fe80::/10 — link-local addresses
     if (addr.startsWith("fe80")) return true;
+    // IPv4-mapped IPv6 (::ffff:x.x.x.x or ::ffff:XXYY:ZZWW)
+    if (addr.startsWith("::ffff:")) {
+      const mapped = addr.slice(7);
+      const dotParts = mapped.split(".");
+      if (dotParts.length === 4 && dotParts.every((p) => /^\d{1,3}$/.test(p))) {
+        if (isPrivateIPv4(dotParts.map(Number))) return true;
+      } else {
+        const hexParts = mapped.split(":");
+        if (hexParts.length === 2) {
+          const hi = parseInt(hexParts[0], 16);
+          const lo = parseInt(hexParts[1], 16);
+          if (
+            isPrivateIPv4([
+              (hi >> 8) & 0xff,
+              hi & 0xff,
+              (lo >> 8) & 0xff,
+              lo & 0xff
+            ])
+          )
+            return true;
+        }
+      }
+    }
   }
 
   return false;
