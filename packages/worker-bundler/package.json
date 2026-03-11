@@ -2,7 +2,6 @@
   "name": "@cloudflare/worker-bundler",
   "description": "Build and bundle Workers at runtime for Cloudflare Worker Loader binding",
   "version": "0.0.2",
-  "private": true,
   "type": "module",
   "license": "MIT",
   "repository": {
