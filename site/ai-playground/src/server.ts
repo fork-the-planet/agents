@@ -22,13 +22,6 @@ import { env } from "cloudflare:workers";
 
 // Gateway is now created per-request with accountId and gatewayId from state
 
-const workersAi = createWorkersAI({
-  binding: env.AI,
-  gateway: {
-    id: "playground"
-  }
-});
-
 export interface PlaygroundState {
   model: string;
   temperature: number;
@@ -80,6 +73,13 @@ export class Playground extends AIChatAgent<Env, PlaygroundState> {
     onFinish: StreamTextOnFinishCallback<ToolSet>,
     _options?: { abortSignal?: AbortSignal }
   ) {
+    const workersAi = createWorkersAI({
+      binding: env.AI,
+      gateway: {
+        id: "playground"
+      }
+    });
+
     let tools: ToolSet = {};
     try {
       tools = this.mcp.getAITools();
