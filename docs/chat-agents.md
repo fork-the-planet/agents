@@ -40,7 +40,7 @@ export class ChatAgent extends AIChatAgent {
     const workersai = createWorkersAI({ binding: this.env.AI });
 
     const result = streamText({
-      model: workersai("@cf/zai-org/glm-4.7-flash"),
+      model: workersai("@cf/moonshotai/kimi-k2.5"),
       messages: await convertToModelMessages(this.messages)
     });
 
@@ -163,7 +163,7 @@ async onChatMessage() {
   const workersai = createWorkersAI({ binding: this.env.AI });
 
   const result = streamText({
-    model: workersai("@cf/zai-org/glm-4.7-flash"),
+    model: workersai("@cf/moonshotai/kimi-k2.5"),
     system: "You are a helpful assistant.",
     messages: await convertToModelMessages(this.messages)
   });
@@ -218,7 +218,7 @@ async onChatMessage() {
   const workersai = createWorkersAI({ binding: this.env.AI });
 
   const result = streamText({
-    model: workersai("@cf/zai-org/glm-4.7-flash"),
+    model: workersai("@cf/moonshotai/kimi-k2.5"),
     messages: pruneMessages({
       messages: await convertToModelMessages(this.messages),
       reasoning: "before-last-message",
@@ -296,7 +296,7 @@ When a user clicks "stop" in the chat UI, the client sends a `CF_AGENT_CHAT_REQU
 ```typescript
 async onChatMessage(_onFinish, options) {
   const result = streamText({
-    model: workersai("@cf/zai-org/glm-4.7-flash"),
+    model: workersai("@cf/moonshotai/kimi-k2.5"),
     messages: await convertToModelMessages(this.messages),
     abortSignal: options?.abortSignal // Pass through for cancellation
   });
@@ -380,7 +380,7 @@ async onChatMessage() {
   const workersai = createWorkersAI({ binding: this.env.AI });
 
   const result = streamText({
-    model: workersai("@cf/zai-org/glm-4.7-flash"),
+    model: workersai("@cf/moonshotai/kimi-k2.5"),
     messages: await convertToModelMessages(this.messages),
     tools: {
       getWeather: tool({
@@ -447,7 +447,7 @@ import { createToolsFromClientSchemas } from "@cloudflare/ai-chat";
 
 async onChatMessage(_onFinish, options) {
   const result = streamText({
-    model: workersai("@cf/zai-org/glm-4.7-flash"),
+    model: workersai("@cf/moonshotai/kimi-k2.5"),
     messages: await convertToModelMessages(this.messages),
     tools: createToolsFromClientSchemas(options?.clientTools)
   });
@@ -618,7 +618,7 @@ export class ChatAgent extends AIChatAgent {
     const stream = createUIMessageStream({
       execute: async ({ writer }) => {
         const result = streamText({
-          model: workersai("@cf/zai-org/glm-4.7-flash"),
+          model: workersai("@cf/moonshotai/kimi-k2.5"),
           messages: await convertToModelMessages(this.messages)
         });
 
@@ -762,7 +762,7 @@ export class ChatAgent extends AIChatAgent {
 
   async onChatMessage() {
     const result = streamText({
-      model: workersai("@cf/zai-org/glm-4.7-flash"),
+      model: workersai("@cf/moonshotai/kimi-k2.5"),
       messages: pruneMessages({
         // LLM context limit
         messages: await convertToModelMessages(this.messages),
@@ -787,7 +787,7 @@ import { createWorkersAI } from "workers-ai-provider";
 
 const workersai = createWorkersAI({ binding: this.env.AI });
 const result = streamText({
-  model: workersai("@cf/zai-org/glm-4.7-flash"),
+  model: workersai("@cf/moonshotai/kimi-k2.5"),
   messages: await convertToModelMessages(this.messages)
 });
 ```

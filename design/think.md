@@ -74,7 +74,7 @@ Think requires almost no boilerplate. The minimal subclass overrides one method:
 export class ChatSession extends Think<Env> {
   getModel() {
     return createWorkersAI({ binding: this.env.AI })(
-      "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+      "@cf/moonshotai/kimi-k2.5"
     );
   }
 }

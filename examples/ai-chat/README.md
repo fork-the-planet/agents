@@ -28,7 +28,7 @@ npm install
 npm run dev
 ```
 
-Uses Workers AI (no API key needed) with `@cf/zai-org/glm-4.7-flash`.
+Uses Workers AI (no API key needed) with `@cf/moonshotai/kimi-k2.5`.
 
 ## Try it
 

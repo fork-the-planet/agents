@@ -46,7 +46,7 @@
  *   workspace = new Workspace(this);
  *
  *   getModel() {
- *     return createWorkersAI({ binding: this.env.AI })("@cf/meta/llama-3.3-70b-instruct-fp8-fast");
+ *     return createWorkersAI({ binding: this.env.AI })("@cf/moonshotai/kimi-k2.5");
  *   }
  *
  *   getTools() {

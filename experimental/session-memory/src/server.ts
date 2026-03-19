@@ -22,7 +22,7 @@ async function compactMessages(
 
   const workersai = createWorkersAI({ binding: ai });
   const { text } = await generateText({
-    model: workersai("@cf/zai-org/glm-4.7-flash"),
+    model: workersai("@cf/moonshotai/kimi-k2.5"),
     system:
       "Summarize this conversation concisely, preserving key decisions, facts, and context.",
     messages: await convertToModelMessages(messages)
@@ -55,7 +55,7 @@ export class ChatAgent extends Agent<Env> {
 
     const workersai = createWorkersAI({ binding: this.env.AI });
     const { text } = await generateText({
-      model: workersai("@cf/zai-org/glm-4.7-flash"),
+      model: workersai("@cf/moonshotai/kimi-k2.5"),
       system: "You are a helpful assistant.",
       messages: await convertToModelMessages(this.session.getMessages())
     });

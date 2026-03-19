@@ -16,7 +16,7 @@ export class ChatAgent extends AIChatAgent<Env> {
     const workersai = createWorkersAI({ binding: this.env.AI });
 
     const result = streamText({
-      model: workersai("@cf/zai-org/glm-4.7-flash"),
+      model: workersai("@cf/moonshotai/kimi-k2.5"),
       system:
         "You are a helpful assistant running on Cloudflare Workers. " +
         "You can check the weather and get the user's timezone.",

@@ -27,7 +27,7 @@ export class DynamicToolsAgent extends AIChatAgent {
     const workersai = createWorkersAI({ binding: this.env.AI });
 
     const result = streamText({
-      model: workersai("@cf/zai-org/glm-4.7-flash"),
+      model: workersai("@cf/moonshotai/kimi-k2.5"),
       system:
         "You are a helpful assistant. You have access to tools provided by " +
         "the embedding application. Use them when asked. If no tools are " +

@@ -203,7 +203,7 @@ export class MyAgent extends AIChatAgent {
     const workersai = createWorkersAI({ binding: this.env.AI });
 
     const result = streamText({
-      model: workersai("@cf/zai-org/glm-4.7-flash"),
+      model: workersai("@cf/moonshotai/kimi-k2.5"),
       messages: await convertToModelMessages(this.messages),
       tools: {
         // Tool with conditional approval
@@ -364,7 +364,7 @@ export class MyAgent extends AIChatAgent {
     const workersai = createWorkersAI({ binding: this.env.AI });
 
     const result = streamText({
-      model: workersai("@cf/zai-org/glm-4.7-flash"),
+      model: workersai("@cf/moonshotai/kimi-k2.5"),
       messages: await convertToModelMessages(this.messages),
       tools: {
         // No execute function - client handles via onToolCall

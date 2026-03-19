@@ -52,7 +52,7 @@ export interface PlaygroundState {
  */
 export class Playground extends AIChatAgent<Env, PlaygroundState> {
   initialState: PlaygroundState = {
-    model: "@cf/zai-org/glm-4.7-flash",
+    model: "@cf/moonshotai/kimi-k2.5",
     temperature: 1,
     stream: true,
     system:

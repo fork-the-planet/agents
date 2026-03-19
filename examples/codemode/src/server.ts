@@ -110,7 +110,7 @@ export class Codemode extends AIChatAgent<Env> {
     });
 
     const result = streamText({
-      model: workersai("@cf/zai-org/glm-4.7-flash"),
+      model: workersai("@cf/moonshotai/kimi-k2.5"),
       system:
         "You are a helpful project management assistant. " +
         "You can create and manage projects, tasks, sprints, and comments using the codemode tool. " +

@@ -24,7 +24,7 @@ import { createToolsFromClientSchemas } from "@cloudflare/ai-chat";
 
 async onChatMessage(_onFinish, options) {
   const result = streamText({
-    model: workersai("@cf/zai-org/glm-4.7-flash"),
+    model: workersai("@cf/moonshotai/kimi-k2.5"),
     tools: createToolsFromClientSchemas(options?.clientTools),
     // ...
   });

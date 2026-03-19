@@ -32,7 +32,7 @@ npm run build # from repo root
 npm start     # from this directory -- starts Vite dev server
 ```
 
-Uses Workers AI (no API key needed) with `@cf/zai-org/glm-4.7-flash`.
+Uses Workers AI (no API key needed) with `@cf/moonshotai/kimi-k2.5`.
 
 To also run the Node executor (optional):
 

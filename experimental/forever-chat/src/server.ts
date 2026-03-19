@@ -30,7 +30,7 @@ export class ForeverChatAgent extends DurableChatAgent<Env> {
     const workersai = createWorkersAI({ binding: this.env.AI });
 
     const result = streamText({
-      model: workersai("@cf/zai-org/glm-4.7-flash"),
+      model: workersai("@cf/moonshotai/kimi-k2.5"),
       system:
         "You are a helpful assistant running as a durable agent. " +
         "Your streaming connection is kept alive via keepAlive(), " +

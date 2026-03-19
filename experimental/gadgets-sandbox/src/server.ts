@@ -417,7 +417,7 @@ export class SandboxAgent extends AIChatAgent<Env, SandboxState> {
     const agent = this;
 
     const result = streamText({
-      model: workersai("@cf/zai-org/glm-4.7-flash"),
+      model: workersai("@cf/moonshotai/kimi-k2.5"),
       system: `You are a helpful assistant that can write and execute JavaScript code to work with a customer database.
 
 You have access to an executeCode tool. The code you write runs in a SANDBOX — a completely

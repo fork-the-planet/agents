@@ -16,7 +16,7 @@ export class HumanInTheLoop extends AIChatAgent {
 
     const result = streamText({
       messages: await convertToModelMessages(this.messages),
-      model: workersai("@cf/zai-org/glm-4.7-flash"),
+      model: workersai("@cf/moonshotai/kimi-k2.5"),
       tools,
       stopWhen: stepCountIs(5)
     });

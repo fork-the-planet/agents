@@ -101,8 +101,8 @@ export type ClientMessage =
 const ORCHESTRATOR_ID = "orchestrator";
 
 const MODEL_IDS: Record<ModelTier, string> = {
-  fast: "@cf/zai-org/glm-4.7-flash",
-  capable: "@cf/zai-org/glm-4.7-flash"
+  fast: "@cf/moonshotai/kimi-k2.5",
+  capable: "@cf/moonshotai/kimi-k2.5"
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

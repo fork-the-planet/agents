@@ -138,7 +138,7 @@ export class PerspectiveAgent extends Agent<Env> {
     const workersai = createWorkersAI({ binding: this.env.AI });
 
     const result = await generateText({
-      model: workersai("@cf/zai-org/glm-4.7-flash"),
+      model: workersai("@cf/moonshotai/kimi-k2.5"),
       system: perspective.system,
       prompt: question
     });
@@ -272,7 +272,7 @@ export class CoordinatorAgent extends AIChatAgent<Env, SubagentState> {
     // Synthesize: ask the LLM to combine the three perspectives
     const workersai = createWorkersAI({ binding: this.env.AI });
     const synthesisResult = await generateText({
-      model: workersai("@cf/zai-org/glm-4.7-flash"),
+      model: workersai("@cf/moonshotai/kimi-k2.5"),
       system:
         "You are a senior advisor synthesizing multiple perspectives into a " +
         "balanced, actionable recommendation. Be concise — 2-3 paragraphs max.",
@@ -305,7 +305,7 @@ export class CoordinatorAgent extends AIChatAgent<Env, SubagentState> {
     const agent = this;
 
     const result = streamText({
-      model: workersai("@cf/zai-org/glm-4.7-flash"),
+      model: workersai("@cf/moonshotai/kimi-k2.5"),
       system: `You are a coordinator that manages three specialist sub-agents to analyze questions from multiple perspectives.
 
 When the user asks a question or presents a topic for analysis, use the analyzeFromAllPerspectives tool. This will:

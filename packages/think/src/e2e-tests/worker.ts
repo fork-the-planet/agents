@@ -20,7 +20,7 @@ export class TestAssistant extends Think<Env> {
 
   getModel(): LanguageModel {
     return createWorkersAI({ binding: this.env.AI })(
-      "@cf/zai-org/glm-4.7-flash"
+      "@cf/moonshotai/kimi-k2.5"
     );
   }
 

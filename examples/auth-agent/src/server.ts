@@ -59,7 +59,7 @@ export class ChatAgent extends AIChatAgent<Env> {
 
     const result = streamText({
       abortSignal: options?.abortSignal,
-      model: workersai("@cf/zai-org/glm-4.7-flash"),
+      model: workersai("@cf/moonshotai/kimi-k2.5"),
       system: `You are a helpful assistant. The user's name is ${userName}. Address them by name occasionally.`,
       messages: await convertToModelMessages(this.messages)
     });

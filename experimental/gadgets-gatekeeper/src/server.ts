@@ -254,7 +254,7 @@ export class GatekeeperAgent extends AIChatAgent<Env, GatekeeperState> {
     const agent = this;
 
     const result = streamText({
-      model: workersai("@cf/zai-org/glm-4.7-flash"),
+      model: workersai("@cf/moonshotai/kimi-k2.5"),
       system: `You are a helpful database administrator assistant. You manage a customer database.
 
 You can query the database freely — reads are always allowed. But any changes to the data

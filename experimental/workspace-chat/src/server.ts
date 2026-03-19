@@ -31,7 +31,7 @@ export class WorkspaceChatAgent extends AIChatAgent {
 
     const result = streamText({
       abortSignal: options?.abortSignal,
-      model: workersai("@cf/zai-org/glm-4.7-flash"),
+      model: workersai("@cf/moonshotai/kimi-k2.5"),
       system: [
         "You are a helpful coding assistant with access to a persistent virtual filesystem.",
         "You have direct tools for simple file operations (readFile, writeFile, listDirectory, deleteFile, mkdir, glob).",

@@ -154,7 +154,7 @@ For Workers AI integration:
 Access in your agent:
 
 ```typescript
-const response = await this.env.AI.run("@cf/zai-org/glm-4.7-flash", {
+const response = await this.env.AI.run("@cf/moonshotai/kimi-k2.5", {
   prompt: "Hello!"
 });
 ```

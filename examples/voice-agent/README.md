@@ -7,7 +7,7 @@ Uses Workers AI for all models — zero external API keys required:
 - **STT**: Deepgram Nova 3 (`@cf/deepgram/nova-3`)
 - **TTS**: Deepgram Aura (`@cf/deepgram/aura-1`)
 - **VAD**: Pipecat Smart Turn v2 (`@cf/pipecat-ai/smart-turn-v2`)
-- **LLM**: Llama 4 Scout (`@cf/meta/llama-4-scout-17b-16e-instruct`)
+- **LLM**: Kimi K2.5 (`@cf/moonshotai/kimi-k2.5`)
 
 ## Run it
 
@@ -29,7 +29,7 @@ Browser                          Durable Object (VoiceAgent)
 │          │ ────────────────────► │   ↓                      │
 │          │                       │ STT (nova-3)             │
 │          │   JSON: transcript    │   ↓                      │
-│          │ ◄──────────────────── │ LLM (llama-4-scout)      │
+│          │ ◄──────────────────── │ LLM (kimi-k2.5)      │
 │          │   binary: MP3 audio   │   ↓ (sentence chunking)  │
 │ Speaker  │ ◄──────────────────── │ TTS (aura-1, streaming)  │
 └──────────┘                       └──────────────────────────┘

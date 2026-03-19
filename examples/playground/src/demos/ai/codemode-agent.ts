@@ -69,7 +69,7 @@ export class CodemodeAgent extends AIChatAgent<Env> {
     const codemode = createCodeTool({ tools: pmTools, executor });
 
     const result = streamText({
-      model: workersai("@cf/zai-org/glm-4.7-flash"),
+      model: workersai("@cf/moonshotai/kimi-k2.5"),
       system:
         "You are a helpful assistant with access to a codemode tool. " +
         "When asked to perform operations, use the codemode tool to write JavaScript code " +

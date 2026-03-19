@@ -280,7 +280,7 @@ export class WorkerPlayground extends AIChatAgent<Env> {
 
     const result = streamText({
       abortSignal: options?.abortSignal,
-      model: workersai("@cf/zai-org/glm-4.7-flash"),
+      model: workersai("@cf/moonshotai/kimi-k2.5"),
       system: [
         "You are a full-stack app generator for Cloudflare Workers with persistent storage.",
         "The user describes what they want and you generate a complete app with server code and static assets.",
