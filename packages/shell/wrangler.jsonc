@@ -1,0 +1,31 @@
+{
+  "compatibility_date": "2026-01-28",
+  "compatibility_flags": [
+    "nodejs_compat",
+    "experimental",
+    "enable_nodejs_tty_module",
+    "enable_nodejs_fs_module",
+    "enable_nodejs_http_modules",
+    "enable_nodejs_perf_hooks_module"
+  ],
+  "worker_loaders": [
+    {
+      "binding": "LOADER"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "TestWorkspaceAgent",
+        "name": "TestWorkspaceAgent"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "new_sqlite_classes": ["TestWorkspaceAgent"],
+      "tag": "v1"
+    }
+  ],
+  "main": "src/tests/worker.ts"
+}

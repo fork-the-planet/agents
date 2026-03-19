@@ -1,80 +1,29 @@
-// Shell class + compat aliases
+// ── Workspace (durable SQLite + R2 filesystem) ───────────────────────
 export {
-  Shell,
-  Bash,
-  type ShellOptions,
-  type BashOptions,
-  type ShellLogger,
-  type BashLogger,
-  type ExecOptions,
-  type ShellExecResult
-} from "./Shell";
+  Workspace,
+  type WorkspaceHost,
+  type LegacyWorkspaceHost,
+  type WorkspaceOptions,
+  type EntryType,
+  type FileInfo,
+  type FileStat,
+  type WorkspaceChangeEvent,
+  type WorkspaceChangeType
+} from "./filesystem";
 
-// Pluggable interfaces
-export type {
-  SqlExecutor,
-  CodeExecutor,
-  MarkdownConverter
-} from "./interfaces";
+// ── FileSystem interface + InMemoryFs ─────────────────────────────────
+export { InMemoryFs } from "./fs/in-memory-fs";
+export type { FileSystem, FsStat, InitialFiles } from "./fs/interface";
 
-// Command registry
-export type { CommandName, NetworkCommandName } from "./commands/registry";
-export { getCommandNames, getNetworkCommandNames } from "./commands/registry";
-
-// Custom commands API
-export type { CustomCommand, LazyCommand } from "./custom-commands";
-export { defineCommand } from "./custom-commands";
-
-// Filesystem
-export { InMemoryFs } from "./fs/in-memory-fs/index";
-export type {
-  BufferEncoding,
-  CpOptions,
-  DirectoryEntry,
-  FileContent,
-  FileEntry,
-  FileInit,
-  FileSystemFactory,
-  FsEntry,
-  FsStat,
-  InitialFiles,
-  LazyFileEntry,
-  LazyFileProvider,
-  MkdirOptions,
-  RmOptions,
-  SymlinkEntry
-} from "./fs/interface";
-
-// Network
-export type { NetworkConfig, SecureFetch } from "./network/index";
+// ── StateBackend adapter ──────────────────────────────────────────────
+export type { StateBackend } from "./backend";
+export { StateBatchOperationError } from "./backend";
 export {
-  NetworkAccessDeniedError,
-  RedirectNotAllowedError,
-  TooManyRedirectsError
-} from "./network/index";
+  FileSystemStateBackend,
+  createMemoryStateBackend,
+  type FileSystemStateBackendOptions
+} from "./memory";
+export { createWorkspaceStateBackend } from "./workspace";
 
-// Parser
-export { parse } from "./parser/parser";
-
-// Core types
-export type {
-  BashExecResult,
-  Command,
-  CommandContext,
-  ExecResult,
-  IFileSystem,
-  TraceCallback
-} from "./types";
-
-// Execution limits
-export type { ExecutionLimits } from "./limits";
-
-// AST types
-export type {
-  CommandNode,
-  PipelineNode,
-  ScriptNode,
-  SimpleCommandNode,
-  StatementNode,
-  WordNode
-} from "./ast/types";
+// ── LLM prompt helpers ────────────────────────────────────────────────
+export { STATE_TYPES, STATE_SYSTEM_PROMPT } from "./prompt";

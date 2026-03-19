@@ -6,16 +6,31 @@ import { describe, it, expect, vi } from "vitest";
 import { createCodeTool } from "../tool";
 import { z } from "zod";
 import type { ToolDescriptors } from "../tool-types";
-import type { Executor, ExecuteResult } from "../executor";
+import type { Executor, ExecuteResult, ResolvedProvider } from "../executor";
 
 /** A mock executor that records calls and returns configurable results. */
 function createMockExecutor(result: ExecuteResult = { result: "ok" }) {
-  const calls: { code: string; fnNames: string[] }[] = [];
+  const calls: {
+    code: string;
+    fnNames: string[];
+    providers: ResolvedProvider[];
+  }[] = [];
   const executor: Executor = {
-    execute: vi.fn(async (code, fns) => {
-      calls.push({ code, fnNames: Object.keys(fns) });
-      return result;
-    })
+    execute: vi.fn(
+      async (
+        code: string,
+        providersOrFns:
+          | ResolvedProvider[]
+          | Record<string, (...args: unknown[]) => Promise<unknown>>
+      ) => {
+        const providers = Array.isArray(providersOrFns)
+          ? providersOrFns
+          : [{ name: "codemode", fns: providersOrFns }];
+        const allFnNames = providers.flatMap((p) => Object.keys(p.fns));
+        calls.push({ code, fnNames: allFnNames, providers });
+        return result;
+      }
+    )
   };
   return { executor, calls };
 }
@@ -101,12 +116,12 @@ describe("createCodeTool", () => {
       }
     };
 
-    let capturedFns: Record<string, Function> = {};
+    let capturedProviders: ResolvedProvider[] = [];
     const executor: Executor = {
-      execute: vi.fn(async (code, fns) => {
-        capturedFns = fns;
-        // Actually call the fn to verify it works
-        const result = await fns.myTool({ x: 42 });
+      execute: vi.fn(async (_code: string, p: unknown) => {
+        const providers = p as ResolvedProvider[];
+        capturedProviders = providers;
+        const result = await providers[0].fns.myTool({ x: 42 });
         return { result };
       })
     };
@@ -118,7 +133,7 @@ describe("createCodeTool", () => {
     );
 
     expect(executeSpy).toHaveBeenCalledWith({ x: 42 });
-    expect(capturedFns.myTool).toBeDefined();
+    expect(capturedProviders[0].fns.myTool).toBeDefined();
   });
 
   it("should skip tools without execute functions", async () => {
@@ -136,8 +151,9 @@ describe("createCodeTool", () => {
 
     let capturedFnNames: string[] = [];
     const executor: Executor = {
-      execute: vi.fn(async (_code, fns) => {
-        capturedFnNames = Object.keys(fns);
+      execute: vi.fn(async (_code: string, p: unknown) => {
+        const providers = p as ResolvedProvider[];
+        capturedFnNames = providers.flatMap((pr) => Object.keys(pr.fns));
         return { result: null };
       })
     };
@@ -169,8 +185,9 @@ describe("createCodeTool", () => {
 
     let capturedFnNames: string[] = [];
     const executor: Executor = {
-      execute: vi.fn(async (_code, fns) => {
-        capturedFnNames = Object.keys(fns);
+      execute: vi.fn(async (_code: string, p: unknown) => {
+        const providers = p as ResolvedProvider[];
+        capturedFnNames = providers.flatMap((pr) => Object.keys(pr.fns));
         return { result: null };
       })
     };
@@ -206,8 +223,9 @@ describe("createCodeTool", () => {
 
     let capturedFnNames: string[] = [];
     const executor: Executor = {
-      execute: vi.fn(async (_code, fns) => {
-        capturedFnNames = Object.keys(fns);
+      execute: vi.fn(async (_code: string, p: unknown) => {
+        const providers = p as ResolvedProvider[];
+        capturedFnNames = providers.flatMap((pr) => Object.keys(pr.fns));
         return { result: null };
       })
     };
@@ -426,8 +444,9 @@ describe("createCodeTool", () => {
     };
 
     const executor: Executor = {
-      execute: vi.fn(async (_code, fns) => {
-        const result = await fns.increment({});
+      execute: vi.fn(async (_code: string, p: unknown) => {
+        const providers = p as ResolvedProvider[];
+        const result = await providers[0].fns.increment({});
         return { result };
       })
     };

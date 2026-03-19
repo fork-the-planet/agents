@@ -1,4 +1,4 @@
-import type { Workspace, FileInfo } from "agents/experimental/workspace";
+import type { Workspace, FileInfo } from "@cloudflare/shell";
 import { tool } from "ai";
 import { z } from "zod";
 
@@ -96,7 +96,7 @@ function workspaceGrepOps(ws: Workspace): GrepOperations {
  * Create a complete set of AI SDK tools backed by a Workspace instance.
  *
  * ```ts
- * import { Workspace } from "agents/experimental/workspace";
+ * import { Workspace } from "@cloudflare/shell";
  * import { createWorkspaceTools } from "@cloudflare/think";
  *
  * class MyAgent extends Agent<Env> {
