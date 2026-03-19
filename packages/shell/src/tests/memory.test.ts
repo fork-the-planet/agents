@@ -665,6 +665,163 @@ describe("MemoryStateBackend", () => {
   });
 });
 
+describe("InMemoryFs — symlinks", () => {
+  it("stat follows symlinks, lstat does not", async () => {
+    const fs = new InMemoryFs({ "/target.txt": "hello" });
+    await fs.symlink("/target.txt", "/link.txt");
+
+    const stat = await fs.stat("/link.txt");
+    expect(stat.type).toBe("file");
+    expect(stat.size).toBe(5);
+
+    const lstat = await fs.lstat("/link.txt");
+    expect(lstat.type).toBe("symlink");
+  });
+
+  it("readlink returns the symlink target", async () => {
+    const fs = new InMemoryFs();
+    await fs.writeFile("/a.txt", "a");
+    await fs.symlink("/a.txt", "/link");
+
+    await expect(fs.readlink("/link")).resolves.toBe("/a.txt");
+  });
+
+  it("readlink throws on non-symlink", async () => {
+    const fs = new InMemoryFs({ "/plain.txt": "x" });
+    await expect(fs.readlink("/plain.txt")).rejects.toThrow("EINVAL");
+  });
+
+  it("realpath resolves through symlinks", async () => {
+    const fs = new InMemoryFs({ "/dir/file.txt": "content" });
+    await fs.symlink("/dir", "/link");
+
+    await expect(fs.realpath("/link/file.txt")).resolves.toBe("/dir/file.txt");
+  });
+
+  it("resolves intermediate symlinks when reading files", async () => {
+    const fs = new InMemoryFs({ "/actual/data.txt": "payload" });
+    await fs.symlink("/actual", "/shortcut");
+
+    await expect(fs.readFile("/shortcut/data.txt")).resolves.toBe("payload");
+  });
+
+  it("resolves chained symlinks", async () => {
+    const fs = new InMemoryFs({ "/root.txt": "end" });
+    await fs.symlink("/root.txt", "/hop1");
+    await fs.symlink("/hop1", "/hop2");
+    await fs.symlink("/hop2", "/hop3");
+
+    await expect(fs.readFile("/hop3")).resolves.toBe("end");
+    await expect(fs.realpath("/hop3")).resolves.toBe("/root.txt");
+  });
+
+  it("resolves relative symlinks", async () => {
+    const fs = new InMemoryFs({ "/dir/target.txt": "found" });
+    await fs.symlink("target.txt", "/dir/link");
+
+    await expect(fs.readFile("/dir/link")).resolves.toBe("found");
+  });
+
+  it("throws ELOOP on circular symlinks", async () => {
+    const fs = new InMemoryFs();
+    await fs.symlink("/b", "/a");
+    await fs.symlink("/a", "/b");
+
+    await expect(fs.readFile("/a")).rejects.toThrow("ELOOP");
+  });
+
+  it("cp preserves symlinks instead of following them", async () => {
+    const fs = new InMemoryFs({ "/target.txt": "data" });
+    await fs.symlink("/target.txt", "/link");
+    await fs.cp("/link", "/copied");
+
+    const lstat = await fs.lstat("/copied");
+    expect(lstat.type).toBe("symlink");
+    await expect(fs.readlink("/copied")).resolves.toBe("/target.txt");
+  });
+
+  it("mv preserves symlinks", async () => {
+    const fs = new InMemoryFs({ "/target.txt": "data" });
+    await fs.symlink("/target.txt", "/link");
+    await fs.mv("/link", "/moved");
+
+    await expect(fs.readlink("/moved")).resolves.toBe("/target.txt");
+    await expect(fs.exists("/link")).resolves.toBe(false);
+  });
+
+  it("readdirWithFileTypes reports symlinks", async () => {
+    const fs = new InMemoryFs({ "/dir/file.txt": "x" });
+    await fs.symlink("/dir/file.txt", "/dir/link");
+
+    const entries = await fs.readdirWithFileTypes("/dir");
+    const linkEntry = entries.find((e) => e.name === "link");
+    expect(linkEntry?.type).toBe("symlink");
+  });
+});
+
+describe("InMemoryFs — hard links", () => {
+  it("link creates a file sharing the source content", async () => {
+    const fs = new InMemoryFs({ "/original.txt": "shared" });
+    await fs.link("/original.txt", "/hardlink.txt");
+
+    await expect(fs.readFile("/hardlink.txt")).resolves.toBe("shared");
+  });
+
+  it("link throws EEXIST when destination exists", async () => {
+    const fs = new InMemoryFs({
+      "/a.txt": "a",
+      "/b.txt": "b"
+    });
+    await expect(fs.link("/a.txt", "/b.txt")).rejects.toThrow("EEXIST");
+  });
+
+  it("link throws EPERM on directories", async () => {
+    const fs = new InMemoryFs({ "/dir/child.txt": "c" });
+    await expect(fs.link("/dir", "/link")).rejects.toThrow("EPERM");
+  });
+});
+
+describe("InMemoryFs — chmod and utimes", () => {
+  it("chmod changes file mode", async () => {
+    const fs = new InMemoryFs({ "/f.txt": "x" });
+    await fs.chmod("/f.txt", 0o755);
+
+    const stat = await fs.stat("/f.txt");
+    expect(stat.mode).toBe(0o755);
+  });
+
+  it("utimes changes modification time", async () => {
+    const fs = new InMemoryFs({ "/f.txt": "x" });
+    const past = new Date("2020-01-01T00:00:00Z");
+    await fs.utimes("/f.txt", past, past);
+
+    const stat = await fs.stat("/f.txt");
+    expect(stat.mtime).toEqual(past);
+  });
+
+  it("chmod throws ENOENT on missing path", async () => {
+    const fs = new InMemoryFs();
+    await expect(fs.chmod("/nope", 0o644)).rejects.toThrow("ENOENT");
+  });
+});
+
+describe("InMemoryFs — root path guards", () => {
+  it("symlink to root path throws", async () => {
+    const fs = new InMemoryFs();
+    await expect(fs.symlink("/target", "/")).rejects.toThrow("EEXIST");
+  });
+
+  it("link to root path throws", async () => {
+    const fs = new InMemoryFs({ "/f.txt": "x" });
+    await expect(fs.link("/f.txt", "/")).rejects.toThrow("EEXIST");
+  });
+
+  it("cp to root path throws", async () => {
+    const fs = new InMemoryFs({ "/f.txt": "x" });
+    await expect(fs.cp("/f.txt", "/")).rejects.toThrow("EISDIR");
+  });
+});
+
 class FailingWriteFs {
   constructor(
     private readonly inner: InMemoryFs,

@@ -406,7 +406,7 @@ export class InMemoryFs implements FileSystem {
   async cp(src: string, dest: string, options?: CpOptions): Promise<void> {
     validatePath(src, "cp");
     validatePath(dest, "cp");
-    const srcNode = this.resolveNode(src, true, "cp");
+    const srcNode = this.resolveNode(src, false, "cp");
     if (!srcNode) throw this.missing("cp", src);
     if (srcNode.kind === "dir" && !options?.recursive) {
       throw new Error(`EISDIR: is a directory, cp '${src}'`);
@@ -422,6 +422,9 @@ export class InMemoryFs implements FileSystem {
   async symlink(target: string, linkPath: string): Promise<void> {
     validatePath(linkPath, "symlink");
     const segs = split(normalizePath(linkPath));
+    if (segs.length === 0) {
+      throw new Error(`EEXIST: file already exists, symlink '${linkPath}'`);
+    }
     const parent = this.scaffold(segs);
     const name = segs[segs.length - 1];
     if (parent.children.has(name)) {
@@ -444,6 +447,9 @@ export class InMemoryFs implements FileSystem {
       throw new Error(`EPERM: operation not permitted, link '${existingPath}'`);
     }
     const segs = split(normalizePath(newPath));
+    if (segs.length === 0) {
+      throw new Error(`EEXIST: file already exists, link '${newPath}'`);
+    }
     const parent = this.scaffold(segs);
     const name = segs[segs.length - 1];
     if (parent.children.has(name)) {
@@ -682,6 +688,11 @@ export class InMemoryFs implements FileSystem {
 
   private placeNode(normalized: string, node: VNode): void {
     const segs = split(normalized);
+    if (segs.length === 0) {
+      throw new Error(
+        `EISDIR: illegal operation on a directory, write '${normalized}'`
+      );
+    }
     const parent = this.scaffold(segs);
     parent.children.set(segs[segs.length - 1], node);
   }
