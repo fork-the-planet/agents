@@ -11,6 +11,6 @@
   "dependencies": {
     "@cloudflare/codemode": "*",
     "agents": "*",
-    "zod": "^4.3.6"
+    "zod": "^4.4.2"
   }
 }
