@@ -15,11 +15,11 @@
     "acorn": "^8.16.0"
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "1.26.0",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "@playwright/test": "^1.58.2",
-    "ai": "^6.0.116",
+    "ai": "^6.0.182",
     "vitest": "3.2.4",
-    "zod": "^4.3.6"
+    "zod": "^4.4.3"
   },
   "peerDependencies": {
     "@modelcontextprotocol/sdk": "^1.25.0",
