@@ -12,9 +12,9 @@
     "@cloudflare/agents-ui": "*",
     "@cloudflare/voice": "*",
     "agents": "*",
-    "ai": "^6.0.116",
+    "ai": "^6.0.184",
     "workers-ai-provider": "^3.1.4",
-    "zod": "^4.3.6"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4",
