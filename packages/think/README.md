@@ -358,6 +358,12 @@ your code owns forwarding and replay policy. Use `agentTool()` or
 `runAgentTool()` when a parent agent delegates work to a retained child and you
 want event replay, abort bridging, and UI drill-in.
 
+Use `startFiber()` from `agents` outside Think when the durable unit is an
+application-owned job around a turn, such as accepting a webhook once, restoring
+provider state, and posting a visible reply. `submitMessages()` owns Think's
+conversation admission; managed fibers own external side effects and recovery
+policy around that turn.
+
 See [Choosing a turn API](../../docs/think/index.md#choosing-a-turn-api) and
 [Programmatic Submissions](../../docs/think/programmatic-submissions.md) for the
 full API comparison.
@@ -368,16 +374,19 @@ When used as a sub-agent (via `this.subAgent()`), the `chat()` method runs a ful
 
 ```ts
 interface StreamCallback {
+  onStart?(event: { requestId: string }): void | Promise<void>;
   onEvent(json: string): void | Promise<void>;
   onDone(): void | Promise<void>;
   onError?(error: string): void | Promise<void>;
 }
 
 const agent = await this.subAgent(MyAgent, "thread-1");
-await agent.chat("Summarize the project", relay, {
-  signal: abortController.signal
-});
+await agent.chat("Summarize the project", relay);
 ```
+
+`onStart` exposes the request id for RPC-safe cancellation. Call
+`agent.cancelChat(requestId, reason)` if the parent needs to stop the child turn
+after it has started.
 
 Tools belong to the child agent; define them with `getTools()` or use
 `agentTool()` / `runAgentTool()` for parent-child orchestration.
