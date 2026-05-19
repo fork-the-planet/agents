@@ -391,6 +391,7 @@ function Chat() {
           <div className="flex items-center gap-2">
             <MagnifyingGlassIcon size={16} className="text-kumo-secondary" />
             <input
+              aria-label="FULLTEXT search across messages"
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -461,7 +462,7 @@ function Chat() {
               }
               disabled={!isConnected || isLoading}
               rows={2}
-              className="flex-1 !ring-0 focus:!ring-0 !shadow-none !bg-transparent !outline-none"
+              className="flex-1 ring-0! focus:ring-0! shadow-none! bg-transparent! outline-none!"
             />
             <Button
               type="submit"
