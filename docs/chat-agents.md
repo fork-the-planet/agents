@@ -645,6 +645,8 @@ Common return values:
 - `{ continue: false }` — persist partial but do not auto-continue (handle continuation yourself)
 - `{ persist: false, continue: false }` — handle everything yourself (e.g., retrieve a completed response from the provider)
 
+When recovery happens before any stream chunks were written, there is no partial assistant message to continue. If the latest persisted message is still the unanswered user message from the interrupted turn, the framework retries that turn automatically unless `continue` is `false`.
+
 #### Guarding against stale recoveries
 
 After a long outage (an eviction combined with a slow reactivation, or a tool/container that became unreachable mid-stream), auto-continuing can replay a turn the user has already moved on from — or worse, kick off a continuation that keeps failing in the same way and occupies the turn queue while new messages pile up behind it.

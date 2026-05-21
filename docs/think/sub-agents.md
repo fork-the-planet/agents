@@ -388,10 +388,10 @@ onChatRecovery(ctx: ChatRecoveryContext): ChatRecoveryOptions | void
 
 ### ChatRecoveryOptions
 
-| Field      | Type       | Description                                      |
-| ---------- | ---------- | ------------------------------------------------ |
-| `persist`  | `boolean?` | Whether to persist the partial assistant message |
-| `continue` | `boolean?` | Whether to auto-continue with a new turn         |
+| Field      | Type       | Description                                                       |
+| ---------- | ---------- | ----------------------------------------------------------------- |
+| `persist`  | `boolean?` | Whether to persist the partial assistant message                  |
+| `continue` | `boolean?` | Whether to auto-continue with a new turn via `continueLastTurn()` |
 
 ### Example
 
@@ -416,6 +416,17 @@ export class MyAgent extends Think<Env> {
 ```
 
 With `persist: true`, the partial message is saved. With `continue: true`, Think calls `continueLastTurn()` after the agent reaches a stable state.
+
+For pre-stream interruptions, where `ctx.streamId === ""` and `ctx.partialText === ""` but the latest persisted message is still the unanswered user message, Think retries that turn automatically unless `continue` is `false`.
+
+```typescript
+onChatRecovery(ctx: ChatRecoveryContext): ChatRecoveryOptions {
+  if (!ctx.streamId && !ctx.partialText) {
+    console.log("Recovering a pre-stream interruption");
+  }
+  return {};
+}
+```
 
 To suppress continuation for turns that have been orphaned too long to safely replay, gate on `ctx.createdAt`:
 

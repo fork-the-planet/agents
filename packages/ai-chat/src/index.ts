@@ -23,7 +23,13 @@ import {
   type OutgoingMessage
 } from "./types";
 import { autoTransformMessages } from "./ai-chat-v5-migration";
-import { reconcileMessages, resolveToolMergeId } from "agents/chat";
+import {
+  reconcileMessages,
+  resolveToolMergeId,
+  createChatFiberSnapshot,
+  unwrapChatFiberSnapshot,
+  wrapChatFiberSnapshot
+} from "agents/chat";
 import {
   applyChunkToParts,
   isReplayChunk,
@@ -35,7 +41,8 @@ import {
   type TurnResult,
   type MessagePart,
   type StreamChunkData,
-  type SubmitConcurrencyDecision
+  type SubmitConcurrencyDecision,
+  type ChatFiberSnapshot
 } from "agents/chat";
 import { ResumableStream } from "agents/chat";
 import {
@@ -65,6 +72,20 @@ export type {
   SaveMessagesOptions,
   SaveMessagesResult
 } from "agents/chat";
+
+type ChatRecoveryRetryData = {
+  targetUserId?: string;
+  originalRequestId?: string;
+  lastBody?: Record<string, unknown> | null;
+  lastClientTools?: ClientToolSchema[] | null;
+};
+
+type ChatRecoveryContinueData = {
+  targetAssistantId?: string;
+  originalRequestId?: string;
+  lastBody?: Record<string, unknown> | null;
+  lastClientTools?: ClientToolSchema[] | null;
+};
 
 function sendIfOpen(connection: Connection, message: string): boolean {
   try {
@@ -422,6 +443,35 @@ export class AIChatAgent<
    */
   waitForMcpConnections: boolean | { timeout: number } = { timeout: 10_000 };
 
+  private async _runChatRecoveryFiber<T>(
+    requestId: string,
+    continuation: boolean,
+    fn: () => Promise<T>
+  ): Promise<T> {
+    const snapshot = createChatFiberSnapshot({
+      kind: "ai-chat-turn",
+      requestId,
+      continuation,
+      messages: this.messages,
+      lastBody: this._lastBody,
+      lastClientTools: this._lastClientTools
+    });
+
+    return this._runFiberWithStashWrapper(
+      `${(this.constructor as typeof AIChatAgent).CHAT_FIBER_NAME}:${requestId}`,
+      async () => fn(),
+      {
+        initialSnapshot: wrapChatFiberSnapshot(
+          "__cfAIChatFiberSnapshot",
+          snapshot,
+          null
+        ),
+        wrapStash: (data) =>
+          wrapChatFiberSnapshot("__cfAIChatFiberSnapshot", snapshot, data)
+      }
+    );
+  }
+
   /**
    * Array of chat messages for the current conversation.
    *
@@ -777,11 +827,10 @@ export class AIChatAgent<
                     };
 
                     if (this.chatRecovery) {
-                      await this.runFiber(
-                        `${(this.constructor as typeof AIChatAgent).CHAT_FIBER_NAME}:${chatMessageId}`,
-                        async () => {
-                          await chatTurnBody();
-                        }
+                      await this._runChatRecoveryFiber(
+                        chatMessageId,
+                        false,
+                        chatTurnBody
                       );
                     } else {
                       await chatTurnBody();
@@ -1991,11 +2040,10 @@ export class AIChatAgent<
                 };
 
                 if (this.chatRecovery) {
-                  await this.runFiber(
-                    `${(this.constructor as typeof AIChatAgent).CHAT_FIBER_NAME}:${requestId}`,
-                    async () => {
-                      await autoContinuationBody();
-                    }
+                  await this._runChatRecoveryFiber(
+                    requestId,
+                    true,
+                    autoContinuationBody
                   );
                 } else {
                   await autoContinuationBody();
@@ -2072,11 +2120,10 @@ export class AIChatAgent<
             };
 
             if (this.chatRecovery) {
-              await this.runFiber(
-                `${(this.constructor as typeof AIChatAgent).CHAT_FIBER_NAME}:${requestId}`,
-                async () => {
-                  await programmaticBody();
-                }
+              await this._runChatRecoveryFiber(
+                requestId,
+                false,
+                programmaticBody
               );
             } else {
               await programmaticBody();
@@ -2759,15 +2806,53 @@ export class AIChatAgent<
         };
 
         if (this.chatRecovery) {
-          await this.runFiber(
-            `${(this.constructor as typeof AIChatAgent).CHAT_FIBER_NAME}:${requestId}`,
-            async () => {
-              await turnBody();
-            }
-          );
+          await this._runChatRecoveryFiber(requestId, true, turnBody);
         } else {
           await turnBody();
         }
+      },
+      { epoch }
+    );
+
+    if (this._turnQueue.generation !== epoch && status === "completed") {
+      status = "skipped";
+    } else if (wasAborted && status === "completed") {
+      status = "aborted";
+    }
+
+    return { requestId, status };
+  }
+
+  private async _retryLastUserTurn(
+    clientTools?: ClientToolSchema[],
+    body?: Record<string, unknown>,
+    options?: SaveMessagesOptions
+  ): Promise<SaveMessagesResult> {
+    const lastMessage =
+      this.messages.length > 0 ? this.messages[this.messages.length - 1] : null;
+    if (!lastMessage || lastMessage.role !== "user") {
+      return { requestId: "", status: "skipped" };
+    }
+
+    const requestId = nanoid();
+    const epoch = this._turnQueue.generation;
+    let status: SaveMessagesResult["status"] = "completed";
+    let wasAborted = false;
+
+    await this._runExclusiveChatTurn(
+      requestId,
+      async () => {
+        if (this._turnQueue.generation !== epoch) {
+          status = "skipped";
+          return;
+        }
+
+        wasAborted = await this._runProgrammaticChatTurn(
+          requestId,
+          clientTools,
+          body,
+          options?.signal
+        );
       },
       { epoch }
     );
@@ -2804,6 +2889,12 @@ export class AIChatAgent<
     }
 
     const requestId = ctx.name.slice(chatPrefix.length);
+    const { snapshot: recoverySnapshot, user: recoveryData } =
+      unwrapChatFiberSnapshot<"ai-chat-turn">(
+        "__cfAIChatFiberSnapshot",
+        ctx.snapshot,
+        "ai-chat-turn"
+      );
 
     let streamId = "";
     if (requestId) {
@@ -2824,17 +2915,25 @@ export class AIChatAgent<
       ? this._getPartialStreamText(streamId)
       : { text: "", parts: [] as MessagePart[] };
 
-    const options = await this.onChatRecovery({
-      streamId: streamId ?? "",
-      requestId,
-      partialText: partial.text,
-      partialParts: partial.parts,
-      recoveryData: ctx.snapshot,
-      messages: [...this.messages],
-      lastBody: this._lastBody,
-      lastClientTools: this._lastClientTools,
-      createdAt: ctx.createdAt
-    });
+    const options =
+      (await this.onChatRecovery({
+        streamId: streamId ?? "",
+        requestId,
+        partialText: partial.text,
+        partialParts: partial.parts,
+        recoveryData,
+        messages: [...this.messages],
+        lastBody: recoverySnapshot?.lastBody ?? this._lastBody,
+        lastClientTools:
+          recoverySnapshot?.lastClientTools ?? this._lastClientTools,
+        createdAt: ctx.createdAt
+      })) ?? {};
+
+    const shouldRetryPreStream = this._shouldRetryRecoveredPreStreamTurn(
+      recoverySnapshot,
+      streamId ?? "",
+      partial
+    );
 
     // Only persist and complete if the stream is still active. The ACK
     // handler (client reconnect → replayChunks) may have already persisted
@@ -2854,12 +2953,33 @@ export class AIChatAgent<
       this._resumableStream.complete(streamId);
     }
 
-    if (options.continue !== false) {
+    if (shouldRetryPreStream && options.continue !== false) {
+      await this.schedule(
+        0,
+        "_chatRecoveryRetry",
+        {
+          targetUserId: recoverySnapshot.latestUserMessageId,
+          originalRequestId: requestId,
+          lastBody: recoverySnapshot.lastBody ?? null,
+          lastClientTools: recoverySnapshot.lastClientTools ?? null
+        },
+        { idempotent: true }
+      );
+    } else if (options.continue !== false) {
       const targetId = this._findLastAssistantMessage()?.id;
       await this.schedule(
         0,
         "_chatRecoveryContinue",
-        targetId ? { targetAssistantId: targetId } : undefined,
+        {
+          ...(targetId ? { targetAssistantId: targetId } : {}),
+          originalRequestId: requestId,
+          ...(recoverySnapshot
+            ? {
+                lastBody: recoverySnapshot.lastBody ?? null,
+                lastClientTools: recoverySnapshot.lastClientTools ?? null
+              }
+            : {})
+        },
         { idempotent: true }
       );
     }
@@ -2876,18 +2996,19 @@ export class AIChatAgent<
    * - `{ persist: false, continue: false }`: handle everything yourself
    *
    * `ctx.recoveryData` contains any data checkpointed via `this.stash()`
-   * during streaming (e.g., OpenAI `responseId`).
+   * during the turn (e.g., OpenAI `responseId`). If recovery happens before
+   * any stream chunks exist and the latest message is still the unanswered
+   * user message from the interrupted turn, the framework retries that turn
+   * automatically unless continuation is disabled.
    */
   protected async onChatRecovery(
     // oxlint-disable-next-line @typescript-eslint/no-unused-vars -- overridable hook
     _ctx: ChatRecoveryContext
-  ): Promise<ChatRecoveryOptions> {
+  ): Promise<ChatRecoveryOptions | void> {
     return {};
   }
 
-  async _chatRecoveryContinue(data?: {
-    targetAssistantId?: string;
-  }): Promise<void> {
+  async _chatRecoveryContinue(data?: ChatRecoveryContinueData): Promise<void> {
     const ready = await this.waitUntilStable({ timeout: 10_000 });
     if (!ready) {
       console.warn(
@@ -2901,7 +3022,72 @@ export class AIChatAgent<
       return;
     }
 
+    this._applyRecoveredRequestContext(data);
     await this.continueLastTurn();
+  }
+
+  private _applyRecoveredRequestContext(
+    data: ChatRecoveryContinueData | ChatRecoveryRetryData | undefined
+  ): void {
+    if (!data) return;
+    if ("lastClientTools" in data) {
+      this._lastClientTools = data.lastClientTools ?? undefined;
+    }
+    if ("lastBody" in data) {
+      this._lastBody = data.lastBody ?? undefined;
+    }
+    if ("lastClientTools" in data || "lastBody" in data) {
+      this._persistRequestContext();
+    }
+  }
+
+  private _shouldRetryRecoveredPreStreamTurn(
+    snapshot: ChatFiberSnapshot<"ai-chat-turn"> | null,
+    streamId: string,
+    partial: { text: string; parts: MessagePart[] }
+  ): snapshot is ChatFiberSnapshot<"ai-chat-turn"> & {
+    latestUserMessageId: string;
+  } {
+    if (
+      !snapshot ||
+      snapshot.continuation ||
+      !snapshot.latestUserMessageId ||
+      streamId ||
+      partial.text ||
+      partial.parts.length > 0
+    ) {
+      return false;
+    }
+
+    const lastMessage =
+      this.messages.length > 0 ? this.messages[this.messages.length - 1] : null;
+    return (
+      lastMessage?.role === "user" &&
+      lastMessage.id === snapshot.latestUserMessageId
+    );
+  }
+
+  async _chatRecoveryRetry(data?: ChatRecoveryRetryData): Promise<void> {
+    const ready = await this.waitUntilStable({ timeout: 10_000 });
+    if (!ready) {
+      console.warn(
+        "[AIChatAgent] _chatRecoveryRetry timed out waiting for stable state, skipping retry"
+      );
+      return;
+    }
+
+    const lastMessage =
+      this.messages.length > 0 ? this.messages[this.messages.length - 1] : null;
+    if (!lastMessage || lastMessage.role !== "user") {
+      return;
+    }
+
+    if (data?.targetUserId && lastMessage.id !== data.targetUserId) {
+      return;
+    }
+
+    this._applyRecoveredRequestContext(data);
+    await this._retryLastUserTurn(this._lastClientTools, this._lastBody);
   }
 
   /**

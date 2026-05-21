@@ -575,6 +575,8 @@ For a complete multi-provider implementation with full code for each strategy, s
 
 [Think](./think/index.md) exposes `chatRecovery` as a configuration toggle — the recovery machinery is handled for you without implementing `onChatRecovery` yourself.
 
+If the agent is interrupted before any assistant stream chunks are written, there is no partial assistant message to continue. When the latest persisted message is still the unanswered user message from that turn, chat recovery retries the turn automatically unless `onChatRecovery` returns `{ continue: false }`.
+
 ## Managing state over time
 
 An agent that runs for months accumulates data: conversation history, timeline events, completed tasks, schedule records. Without management, this grows unbounded.

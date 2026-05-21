@@ -1846,6 +1846,153 @@ describe("Think — onChatRecovery", () => {
     expect(ctx.partialText).toBe("Partial with stash");
   });
 
+  it("recovers a pre-stream interrupted chat fiber from its early snapshot", async () => {
+    const agent = await freshRecoveryAgent("pre-stream-recovery");
+
+    await agent.persistTestMessage({
+      id: "u-pre-stream",
+      role: "user",
+      parts: [{ type: "text", text: "Recover this unanswered message" }]
+    });
+
+    await agent.insertInterruptedFiber(
+      "__cf_internal_chat_turn:req-pre-stream",
+      {
+        __cfThinkChatFiberSnapshot: {
+          kind: "think-chat-turn",
+          version: 1,
+          requestId: "req-pre-stream",
+          continuation: false,
+          latestMessageId: "u-pre-stream",
+          latestMessageRole: "user",
+          latestUserMessageId: "u-pre-stream",
+          startedAt: Date.now()
+        },
+        user: { providerRequestId: "provider-pre-stream" }
+      }
+    );
+
+    await agent.triggerFiberRecovery();
+
+    const contexts = (await agent.getRecoveryContexts()) as Array<{
+      recoveryData: unknown;
+      partialText: string;
+      streamId: string;
+    }>;
+    const ctx = contexts[contexts.length - 1];
+
+    expect(ctx.streamId).toBe("");
+    expect(ctx.partialText).toBe("");
+    expect(ctx.recoveryData).toEqual({
+      providerRequestId: "provider-pre-stream"
+    });
+  });
+
+  it("retries a pre-stream interrupted user turn by default without duplicating the user message", async () => {
+    const agent = await freshRecoveryAgent("pre-stream-retry");
+
+    await agent.persistTestMessage({
+      id: "u-retry",
+      role: "user",
+      parts: [{ type: "text", text: "Retry this unanswered message" }]
+    });
+
+    await agent.insertInterruptedFiber("__cf_internal_chat_turn:req-retry", {
+      __cfThinkChatFiberSnapshot: {
+        kind: "think-chat-turn",
+        version: 1,
+        requestId: "req-retry",
+        continuation: false,
+        latestMessageId: "u-retry",
+        latestMessageRole: "user",
+        latestUserMessageId: "u-retry",
+        startedAt: Date.now(),
+        lastBody: { mode: "snapshot" }
+      },
+      user: null
+    });
+
+    await agent.triggerFiberRecovery();
+    expect(
+      await agent.getScheduledChatRecoveryCountForTest("_chatRecoveryRetry")
+    ).toBe(1);
+    await agent.runScheduledRecoveryRetryForTest();
+
+    const messages = (await agent.getStoredMessages()) as UIMessage[];
+    expect(messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant"
+    ]);
+    expect(messages[0].id).toBe("u-retry");
+    expect(
+      messages[1].parts
+        .filter((part): part is { type: "text"; text: string } => {
+          return part.type === "text" && "text" in part;
+        })
+        .map((part) => part.text)
+        .join("")
+    ).toBe("Continued response.");
+    expect(await agent.getTurnBodies()).toEqual([{ mode: "snapshot" }]);
+  });
+
+  it("continues a partial stream with request context from the recovered snapshot", async () => {
+    const agent = await freshRecoveryAgent("partial-continue-context");
+
+    await agent.persistTestMessage({
+      id: "u-continue",
+      role: "user",
+      parts: [{ type: "text", text: "Continue this partial answer" }]
+    });
+    await agent.persistTestMessage({
+      id: "a-continue",
+      role: "assistant",
+      parts: [{ type: "text", text: "Partial answer" }]
+    });
+
+    await agent.insertInterruptedStream("stream-continue", "req-continue", [
+      {
+        body: JSON.stringify({ type: "start", messageId: "a-continue" }),
+        index: 0
+      },
+      { body: JSON.stringify({ type: "text-start" }), index: 1 },
+      {
+        body: JSON.stringify({ type: "text-delta", delta: "Partial answer" }),
+        index: 2
+      }
+    ]);
+    await agent.insertInterruptedFiber("__cf_internal_chat_turn:req-continue", {
+      __cfThinkChatFiberSnapshot: {
+        kind: "think-chat-turn",
+        version: 1,
+        requestId: "req-continue",
+        continuation: false,
+        latestMessageId: "a-continue",
+        latestMessageRole: "assistant",
+        latestUserMessageId: "u-continue",
+        startedAt: Date.now(),
+        lastBody: { mode: "snapshot" },
+        lastClientTools: [{ name: "snapshotTool", description: "Snapshot" }]
+      },
+      user: null
+    });
+
+    await agent.triggerFiberRecovery();
+    expect(
+      await agent.getScheduledChatRecoveryCountForTest("_chatRecoveryContinue")
+    ).toBe(1);
+
+    await agent.setRequestContextForTest({ mode: "stale" }, [
+      { name: "staleTool", description: "Stale" }
+    ]);
+    await agent.runScheduledRecoveryContinueForTest();
+
+    expect(await agent.getTurnBodies()).toEqual([{ mode: "snapshot" }]);
+    expect((await agent.getTurnClientToolNames())[0]).toContain("snapshotTool");
+    expect((await agent.getTurnClientToolNames())[0]).not.toContain(
+      "staleTool"
+    );
+  });
+
   it("{ continue: false } persists but does not schedule continuation", async () => {
     const agent = await freshRecoveryAgent("no-continue");
 

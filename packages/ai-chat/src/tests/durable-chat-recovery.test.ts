@@ -23,6 +23,21 @@ interface ChatRecoveryTestStub {
   insertInterruptedFiber(name: string, snapshot?: unknown): Promise<void>;
   triggerFiberRecovery(): Promise<void>;
   persistMessages(messages: unknown[]): Promise<void>;
+  runRecoveryRetryForTest(options?: {
+    targetUserId?: string;
+    lastBody?: Record<string, unknown>;
+  }): Promise<void>;
+  runScheduledRecoveryRetryForTest(): Promise<void>;
+  runScheduledRecoveryContinueForTest(): Promise<void>;
+  setRequestContextForTest(
+    body?: Record<string, unknown>,
+    clientTools?: Array<{ name: string; description?: string }>
+  ): Promise<void>;
+  getOnChatMessageBodies(): Promise<Array<Record<string, unknown> | undefined>>;
+  getOnChatMessageClientTools(): Promise<
+    Array<Array<{ name: string; description?: string }> | undefined>
+  >;
+  getScheduleCountForCallback(callback: string): Promise<number>;
 }
 
 async function getTestAgent(room: string): Promise<ChatRecoveryTestStub> {
@@ -321,6 +336,119 @@ describe("onChatRecovery", () => {
     expect(fiberCtx.streamId).toBe("stream-fiber");
     expect(fiberCtx.partialText).toBe("Fiber recovery text");
     expect(fiberCtx.recoveryData).toEqual({ someUserData: true });
+  });
+
+  it("should retry a pre-stream interrupted user turn by default", async () => {
+    const room = crypto.randomUUID();
+    const agentStub = await getTestAgent(room);
+
+    await agentStub.persistMessages([
+      {
+        id: "user-retry",
+        role: "user",
+        parts: [{ type: "text", text: "Retry this unanswered message" }]
+      }
+    ] as ChatMessage[]);
+
+    await agentStub.insertInterruptedFiber(
+      "__cf_internal_chat_turn:req-retry",
+      {
+        __cfAIChatFiberSnapshot: {
+          kind: "ai-chat-turn",
+          version: 1,
+          requestId: "req-retry",
+          continuation: false,
+          latestMessageId: "user-retry",
+          latestMessageRole: "user",
+          latestUserMessageId: "user-retry",
+          startedAt: Date.now(),
+          lastBody: { mode: "snapshot" }
+        },
+        user: { responseId: "pre-stream" }
+      }
+    );
+
+    await agentStub.triggerFiberRecovery();
+    expect(
+      await agentStub.getScheduleCountForCallback("_chatRecoveryRetry")
+    ).toBe(1);
+    await agentStub.runScheduledRecoveryRetryForTest();
+
+    const contexts = (await agentStub.getRecoveryContexts()) as Array<{
+      streamId: string;
+      partialText: string;
+      recoveryData: unknown;
+      lastBody?: Record<string, unknown>;
+    }>;
+    const ctx = contexts[contexts.length - 1];
+    expect(ctx.streamId).toBe("");
+    expect(ctx.partialText).toBe("");
+    expect(ctx.recoveryData).toEqual({ responseId: "pre-stream" });
+    expect(ctx.lastBody).toEqual({ mode: "snapshot" });
+
+    const messages = (await agentStub.getPersistedMessages()) as ChatMessage[];
+    expect(messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant"
+    ]);
+    expect(messages[0].id).toBe("user-retry");
+    expect(await agentStub.getOnChatMessageBodies()).toEqual([
+      { mode: "snapshot" }
+    ]);
+  });
+
+  it("should continue a partial stream with request context from the recovered snapshot", async () => {
+    const room = crypto.randomUUID();
+    const agentStub = await getTestAgent(room);
+
+    await agentStub.persistMessages([
+      {
+        id: "user-continue",
+        role: "user",
+        parts: [{ type: "text", text: "Continue this partial answer" }]
+      }
+    ] as ChatMessage[]);
+
+    await agentStub.insertInterruptedStream(
+      "stream-continue",
+      "req-continue",
+      makeChunks(["Partial answer"], "assistant-continue")
+    );
+    await agentStub.insertInterruptedFiber(
+      "__cf_internal_chat_turn:req-continue",
+      {
+        __cfAIChatFiberSnapshot: {
+          kind: "ai-chat-turn",
+          version: 1,
+          requestId: "req-continue",
+          continuation: false,
+          latestMessageId: "user-continue",
+          latestMessageRole: "user",
+          latestUserMessageId: "user-continue",
+          startedAt: Date.now(),
+          lastBody: { mode: "snapshot" },
+          lastClientTools: [{ name: "snapshotTool", description: "Snapshot" }]
+        },
+        user: null
+      }
+    );
+
+    await agentStub.triggerFiberRecovery();
+    expect(
+      await agentStub.getScheduleCountForCallback("_chatRecoveryContinue")
+    ).toBe(1);
+
+    await agentStub.setRequestContextForTest({ mode: "stale" }, [
+      { name: "staleTool", description: "Stale" }
+    ]);
+    await agentStub.runScheduledRecoveryContinueForTest();
+
+    expect(await agentStub.getOnChatMessageBodies()).toEqual([
+      { mode: "snapshot" }
+    ]);
+    expect(await agentStub.getOnChatMessageClientTools()).toEqual([
+      [{ name: "snapshotTool", description: "Snapshot" }]
+    ]);
   });
 
   it("should not double-recover when _checkRunFibers runs from both onStart and alarm", async () => {
