@@ -97,11 +97,13 @@ export class TestChatAgent extends AIChatAgent<Env> {
   private _capturedClientTools: ClientToolSchema[] | undefined = undefined;
   // Store captured requestId from onChatMessage options for testing
   private _capturedRequestId: string | undefined = undefined;
+  private _chatMessageCallCount = 0;
 
   async onChatMessage(
     _onFinish: StreamTextOnFinishCallback<ToolSet>,
     options?: OnChatMessageOptions
   ) {
+    this._chatMessageCallCount++;
     // Capture the body, clientTools, and requestId from options for testing
     this._capturedBody = options?.body;
     this._capturedClientTools = options?.clientTools;
@@ -156,6 +158,22 @@ export class TestChatAgent extends AIChatAgent<Env> {
         { type: "text-end", id: "sse-t" },
         { type: "finish" }
       ]);
+    }
+
+    const continuationStreamError = options?.body?.continuationStreamError;
+    if (options?.continuation && typeof continuationStreamError === "string") {
+      const delayMs =
+        typeof options.body?.continuationStreamErrorDelayMs === "number"
+          ? options.body.continuationStreamErrorDelayMs
+          : 25;
+      return makeDelayedSSEChunkResponse(
+        [
+          { type: "start" },
+          { type: "error", errorText: continuationStreamError }
+        ],
+        delayMs,
+        options.abortSignal
+      );
     }
 
     if (
@@ -387,6 +405,14 @@ export class TestChatAgent extends AIChatAgent<Env> {
     return this.waitUntilStable(options);
   }
 
+  setTestBody(body: Record<string, unknown>): void {
+    (this as unknown as { _lastBody: Record<string, unknown> })._lastBody =
+      body;
+    (
+      this as unknown as { _persistRequestContext(): void }
+    )._persistRequestContext();
+  }
+
   resetTurnStateForTest(): void {
     this.resetTurnState();
   }
@@ -399,6 +425,45 @@ export class TestChatAgent extends AIChatAgent<Env> {
 
   async waitForIdleForTest(): Promise<void> {
     await (this as unknown as { waitForIdle(): Promise<void> }).waitForIdle();
+  }
+
+  getChatMessageCallCountForTest(): number {
+    return this._chatMessageCallCount;
+  }
+
+  getContinuationStateForTest(): {
+    hasPending: boolean;
+    hasDeferred: boolean;
+    activeRequestId: string | null;
+    activeConnectionId: string | null;
+  } {
+    const continuation = (
+      this as unknown as {
+        _continuation: {
+          pending: unknown;
+          deferred: unknown;
+          activeRequestId: string | null;
+          activeConnectionId: string | null;
+        };
+      }
+    )._continuation;
+
+    return {
+      hasPending: continuation.pending !== null,
+      hasDeferred: continuation.deferred !== null,
+      activeRequestId: continuation.activeRequestId,
+      activeConnectionId: continuation.activeConnectionId
+    };
+  }
+
+  getLatestStreamStatusForTest(): string | null {
+    const rows = this.sql<{ status: string }>`
+      select status
+      from cf_ai_chat_stream_metadata
+      order by created_at desc
+      limit 1
+    `;
+    return rows[0]?.status ?? null;
   }
 
   getPersistedMessages(): ChatMessage[] {
@@ -715,6 +780,8 @@ export class SlowStreamAgent extends AIChatAgent<Env> {
           responseDelayMs?: number;
           chunkCount?: number;
           chunkDelayMs?: number;
+          streamError?: string;
+          throwError?: boolean;
         }
       | undefined;
     const format = body?.format ?? "plaintext";
@@ -722,6 +789,8 @@ export class SlowStreamAgent extends AIChatAgent<Env> {
     const responseDelayMs = body?.responseDelayMs ?? 0;
     const chunkCount = body?.chunkCount ?? 20;
     const chunkDelayMs = body?.chunkDelayMs ?? 50;
+    const streamError = body?.streamError;
+    const throwError = body?.throwError ?? false;
     const abortSignal = useAbortSignal ? options?.abortSignal : undefined;
 
     if (responseDelayMs > 0) {
@@ -731,6 +800,15 @@ export class SlowStreamAgent extends AIChatAgent<Env> {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async pull(controller) {
+        if (format === "sse" && streamError) {
+          const chunk = JSON.stringify({
+            type: "error",
+            errorText: streamError
+          });
+          controller.enqueue(encoder.encode(`data: ${chunk}\n\n`));
+          controller.close();
+          return;
+        }
         for (let i = 0; i < chunkCount; i++) {
           if (abortSignal?.aborted) {
             controller.close();
@@ -740,6 +818,9 @@ export class SlowStreamAgent extends AIChatAgent<Env> {
           if (abortSignal?.aborted) {
             controller.close();
             return;
+          }
+          if (throwError && i === Math.floor(chunkCount / 2)) {
+            throw new Error("Simulated stream error");
           }
           if (format === "sse") {
             const chunk = JSON.stringify({
@@ -1044,6 +1125,7 @@ export class ResponseAgent extends AIChatAgent<Env> {
           chunkCount?: number;
           chunkDelayMs?: number;
           throwError?: boolean;
+          streamError?: string;
           useAbortSignal?: boolean;
         }
       | undefined;
@@ -1052,12 +1134,22 @@ export class ResponseAgent extends AIChatAgent<Env> {
     const chunkCount = body?.chunkCount ?? 3;
     const chunkDelayMs = body?.chunkDelayMs ?? 10;
     const throwError = body?.throwError ?? false;
+    const streamError = body?.streamError;
     const useAbortSignal = body?.useAbortSignal ?? false;
     const abortSignal = useAbortSignal ? options?.abortSignal : undefined;
 
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async pull(controller) {
+        if (format === "sse" && streamError) {
+          const chunk = JSON.stringify({
+            type: "error",
+            errorText: streamError
+          });
+          controller.enqueue(encoder.encode(`data: ${chunk}\n\n`));
+          controller.close();
+          return;
+        }
         for (let i = 0; i < chunkCount; i++) {
           if (abortSignal?.aborted) {
             controller.close();

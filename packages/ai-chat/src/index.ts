@@ -87,6 +87,11 @@ type ChatRecoveryContinueData = {
   lastClientTools?: ClientToolSchema[] | null;
 };
 
+type StreamResultStatus = {
+  status: Exclude<SaveMessagesResult["status"], "skipped">;
+  error?: string;
+};
+
 function sendIfOpen(connection: Connection, message: string): boolean {
   try {
     connection.send(message);
@@ -1237,8 +1242,13 @@ export class AIChatAgent<
 
   /** @internal Delegate to _resumableStream */
   protected _markStreamError(streamId: string) {
+    const erroredRequestId = this._resumableStream.activeRequestId;
     this._resumableStream.markError(streamId);
     this._pendingResumeConnections.clear();
+    if (erroredRequestId === this._continuation.activeRequestId) {
+      this._continuation.activeRequestId = null;
+      this._continuation.activeConnectionId = null;
+    }
   }
 
   /**
@@ -2025,10 +2035,19 @@ export class AIChatAgent<
                     );
 
                     if (response) {
-                      await this._reply(requestId, response, [], {
-                        continuation: true,
-                        chatMessageId: requestId
-                      });
+                      const replyResult = await this._reply(
+                        requestId,
+                        response,
+                        [],
+                        {
+                          continuation: true,
+                          chatMessageId: requestId
+                        }
+                      );
+                      if (replyResult.status === "error") {
+                        this._clearAllAutoContinuationState(true);
+                        return;
+                      }
                       this._activateDeferredAutoContinuation();
                     } else {
                       this._clearPendingAutoContinuation(true);
@@ -2069,19 +2088,17 @@ export class AIChatAgent<
   }
 
   /**
-   * @returns `true` if the registry's controller for `requestId` was
-   *   aborted during the turn (so the caller can surface
-   *   `status: "aborted"` to the public API). Returns `false` for
-   *   successful or errored completion.
+   * @returns Terminal status for the turn.
    */
   private async _runProgrammaticChatTurn(
     requestId: string,
     clientTools?: ClientToolSchema[],
     body?: Record<string, unknown>,
     externalSignal?: AbortSignal
-  ): Promise<boolean> {
+  ): Promise<StreamResultStatus> {
     this._setRequestContext(clientTools, body);
     let wasAborted = false;
+    let status: StreamResultStatus = { status: "completed" };
 
     await this._tryCatchChat(async () => {
       return agentContext.run(
@@ -2113,7 +2130,7 @@ export class AIChatAgent<
               });
 
               if (response) {
-                await this._reply(requestId, response, [], {
+                status = await this._reply(requestId, response, [], {
                   chatMessageId: requestId
                 });
               }
@@ -2137,7 +2154,10 @@ export class AIChatAgent<
       );
     });
 
-    return wasAborted;
+    if (status.status === "completed" && wasAborted) {
+      return { status: "aborted" };
+    }
+    return status;
   }
 
   /**
@@ -2355,12 +2375,15 @@ export class AIChatAgent<
           return;
         }
 
-        const streamError = this._agentToolLastErrors.get(options.runId);
-        if (streamError) {
+        const streamError =
+          result.error ?? this._agentToolLastErrors.get(options.runId);
+        if (result.status === "error" || streamError) {
+          const errorMessage =
+            streamError ?? "Agent tool run failed during streaming.";
           this.sql`
             update cf_ai_chat_agent_tool_runs
             set request_id = ${requestId}, status = 'error',
-                error_message = ${streamError}, completed_at = ${Date.now()}
+                error_message = ${errorMessage}, completed_at = ${Date.now()}
             where run_id = ${options.runId}
           `;
           return;
@@ -2667,9 +2690,10 @@ export class AIChatAgent<
    * loop's signal aborts and the result reports `status: "aborted"`.
    * Pre-aborted signals short-circuit before any model work runs.
    *
-   * Returns `{ requestId, status }` where `status` is `"completed"` when
-   * the turn ran, `"skipped"` when the chat was cleared, or `"aborted"`
-   * when an external signal cancelled it mid-stream.
+   * Returns `{ requestId, status, error? }` where `status` is `"completed"`
+   * when the turn ran, `"error"` when the stream reported an error,
+   * `"skipped"` when the chat was cleared, or `"aborted"` when an external
+   * signal cancelled it mid-stream.
    */
   async saveMessages(
     messages:
@@ -2684,7 +2708,7 @@ export class AIChatAgent<
     const body = this._lastBody;
     const epoch = this._turnQueue.generation;
     let status: SaveMessagesResult["status"] = "completed";
-    let wasAborted = false;
+    let error: string | undefined;
 
     await this._runExclusiveChatTurn(
       requestId,
@@ -2706,23 +2730,23 @@ export class AIChatAgent<
           return;
         }
 
-        wasAborted = await this._runProgrammaticChatTurn(
+        const turnResult = await this._runProgrammaticChatTurn(
           requestId,
           clientTools,
           body,
           options?.signal
         );
+        status = turnResult.status;
+        error = turnResult.error;
       },
       { epoch }
     );
 
     if (this._turnQueue.generation !== epoch && status === "completed") {
       status = "skipped";
-    } else if (wasAborted && status === "completed") {
-      status = "aborted";
     }
 
-    return { requestId, status };
+    return { requestId, status, ...(error !== undefined && { error }) };
   }
 
   /**
@@ -2753,6 +2777,7 @@ export class AIChatAgent<
     const resolvedBody = body ?? this._lastBody;
     const epoch = this._turnQueue.generation;
     let status: SaveMessagesResult["status"] = "completed";
+    let error: string | undefined;
     let wasAborted = false;
 
     await this._runExclusiveChatTurn(
@@ -2790,10 +2815,17 @@ export class AIChatAgent<
                   });
 
                   if (response) {
-                    await this._reply(requestId, response, [], {
-                      continuation: true,
-                      chatMessageId: requestId
-                    });
+                    const replyResult = await this._reply(
+                      requestId,
+                      response,
+                      [],
+                      {
+                        continuation: true,
+                        chatMessageId: requestId
+                      }
+                    );
+                    status = replyResult.status;
+                    error = replyResult.error;
                   }
                 } finally {
                   if (abortSignal?.aborted) wasAborted = true;
@@ -2820,7 +2852,7 @@ export class AIChatAgent<
       status = "aborted";
     }
 
-    return { requestId, status };
+    return { requestId, status, ...(error !== undefined && { error }) };
   }
 
   private async _retryLastUserTurn(
@@ -2837,7 +2869,7 @@ export class AIChatAgent<
     const requestId = nanoid();
     const epoch = this._turnQueue.generation;
     let status: SaveMessagesResult["status"] = "completed";
-    let wasAborted = false;
+    let error: string | undefined;
 
     await this._runExclusiveChatTurn(
       requestId,
@@ -2847,23 +2879,23 @@ export class AIChatAgent<
           return;
         }
 
-        wasAborted = await this._runProgrammaticChatTurn(
+        const turnResult = await this._runProgrammaticChatTurn(
           requestId,
           clientTools,
           body,
           options?.signal
         );
+        status = turnResult.status;
+        error = turnResult.error;
       },
       { epoch }
     );
 
     if (this._turnQueue.generation !== epoch && status === "completed") {
       status = "skipped";
-    } else if (wasAborted && status === "completed") {
-      status = "aborted";
     }
 
-    return { requestId, status };
+    return { requestId, status, ...(error !== undefined && { error }) };
   }
 
   // ── Chat recovery via fibers ──────────────────────────────────────
@@ -3831,7 +3863,7 @@ export class AIChatAgent<
     streamCompleted: { value: boolean },
     continuation = false,
     abortSignal?: AbortSignal
-  ): Promise<"completed" | "aborted"> {
+  ): Promise<StreamResultStatus> {
     streamCompleted.value = false;
 
     // During continuation, the first text-start and reasoning-start from the
@@ -3876,7 +3908,7 @@ export class AIChatAgent<
           type: MessageType.CF_AGENT_USE_CHAT_RESPONSE,
           ...(continuation && { continuation: true })
         });
-        return "completed";
+        return { status: "completed" };
       }
 
       const chunk = decoder.decode(value);
@@ -4135,14 +4167,28 @@ export class AIChatAgent<
                   break;
                 }
                 case "error": {
+                  const error =
+                    data.errorText ?? JSON.stringify({ type: data.type });
                   this._broadcastChatMessage({
                     error: true,
-                    body: data.errorText ?? JSON.stringify(data),
+                    body: error,
                     done: false,
                     id,
-                    type: MessageType.CF_AGENT_USE_CHAT_RESPONSE
+                    type: MessageType.CF_AGENT_USE_CHAT_RESPONSE,
+                    ...(continuation && { continuation: true })
                   });
-                  break;
+                  this._markStreamError(streamId);
+                  this._emit("message:error", { error });
+                  await reader.cancel().catch(() => {});
+                  streamCompleted.value = true;
+                  this._broadcastChatMessage({
+                    body: "",
+                    done: true,
+                    id,
+                    type: MessageType.CF_AGENT_USE_CHAT_RESPONSE,
+                    ...(continuation && { continuation: true })
+                  });
+                  return { status: "error", error };
                 }
               }
             }
@@ -4200,10 +4246,10 @@ export class AIChatAgent<
         type: MessageType.CF_AGENT_USE_CHAT_RESPONSE,
         ...(continuation && { continuation: true })
       });
-      return "aborted";
+      return { status: "aborted" };
     }
 
-    return "completed";
+    return { status: "completed" };
   }
 
   // Handle plain text responses (e.g., from generateText)
@@ -4215,7 +4261,7 @@ export class AIChatAgent<
     streamCompleted: { value: boolean },
     continuation = false,
     abortSignal?: AbortSignal
-  ): Promise<"completed" | "aborted"> {
+  ): Promise<StreamResultStatus> {
     // During continuation, if the last text part was still streaming
     // (interrupted mid-generation), reuse it so the resumed content
     // stays in the same block.
@@ -4294,7 +4340,7 @@ export class AIChatAgent<
           type: MessageType.CF_AGENT_USE_CHAT_RESPONSE,
           ...(continuation && { continuation: true })
         });
-        return "completed";
+        return { status: "completed" };
       }
 
       const chunk = decoder.decode(value);
@@ -4327,10 +4373,10 @@ export class AIChatAgent<
         type: MessageType.CF_AGENT_USE_CHAT_RESPONSE,
         ...(continuation && { continuation: true })
       });
-      return "aborted";
+      return { status: "aborted" };
     }
 
-    return "completed";
+    return { status: "completed" };
   }
 
   /**
@@ -4372,7 +4418,7 @@ export class AIChatAgent<
     response: Response,
     excludeBroadcastIds: string[] = [],
     options: { continuation?: boolean; chatMessageId?: string } = {}
-  ) {
+  ): Promise<StreamResultStatus> {
     const { continuation = false, chatMessageId } = options;
     // Look up the abort signal for this request so we can cancel the reader
     // loop if the client sends a cancel message. This is a safety net —
@@ -4395,7 +4441,7 @@ export class AIChatAgent<
             ...(continuation && { continuation: true })
           });
           this._activateDeferredAutoContinuation();
-          return;
+          return { status: "completed" };
         }
 
         // Start tracking this stream for resumability
@@ -4413,7 +4459,7 @@ export class AIChatAgent<
         const contentType = response.headers.get("content-type") || "";
         const isSSE = contentType.includes("text/event-stream"); // AI SDK v5 SSE format
         const streamCompleted = { value: false };
-        let streamEndStatus: "completed" | "aborted" | "error" = "completed";
+        let streamResult: StreamResultStatus = { status: "completed" };
         // Capture before try so it's available after finally.
         // _approvalPersistedMessageId is set inside _streamSSEReply when a
         // tool enters approval-requested state and the message is persisted early.
@@ -4422,7 +4468,7 @@ export class AIChatAgent<
         try {
           if (isSSE) {
             // AI SDK v5 SSE format
-            streamEndStatus = await this._streamSSEReply(
+            streamResult = await this._streamSSEReply(
               id,
               streamId,
               reader,
@@ -4432,7 +4478,7 @@ export class AIChatAgent<
               abortSignal
             );
           } else {
-            streamEndStatus = await this._sendPlaintextReply(
+            streamResult = await this._sendPlaintextReply(
               id,
               streamId,
               reader,
@@ -4443,31 +4489,24 @@ export class AIChatAgent<
             );
           }
         } catch (error) {
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          streamResult = { status: "error", error: errorMessage };
           // Mark stream as error if not already completed
           if (!streamCompleted.value) {
             this._markStreamError(streamId);
             // Notify clients of the error
             this._broadcastChatMessage({
-              body: error instanceof Error ? error.message : "Stream error",
+              body: errorMessage,
               done: true,
               error: true,
               id,
               type: MessageType.CF_AGENT_USE_CHAT_RESPONSE,
               ...(continuation && { continuation: true })
             });
-            this._emit("message:error", {
-              error: error instanceof Error ? error.message : String(error)
-            });
-
-            this._pendingChatResponseResults.push({
-              message,
-              requestId: id,
-              continuation,
-              status: "error",
-              error: error instanceof Error ? error.message : String(error)
-            });
+            this._emit("message:error", { error: errorMessage });
+            streamCompleted.value = true;
           }
-          throw error;
         } finally {
           reader.releaseLock();
 
@@ -4482,7 +4521,7 @@ export class AIChatAgent<
           // Only emit observability on success (not on error path).
           if (chatMessageId) {
             this._abortRegistry.remove(chatMessageId);
-            if (streamCompleted.value) {
+            if (streamCompleted.value && streamResult.status !== "error") {
               this._emit("message:response");
             }
           }
@@ -4535,8 +4574,10 @@ export class AIChatAgent<
           message,
           requestId: id,
           continuation,
-          status: streamEndStatus
+          status: streamResult.status,
+          ...(streamResult.error !== undefined && { error: streamResult.error })
         });
+        return streamResult;
       })
     );
   }
