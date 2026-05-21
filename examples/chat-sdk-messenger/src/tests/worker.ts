@@ -1,11 +1,14 @@
-import { Agent } from "agents";
-import { Message } from "chat";
+import { Agent, routeAgentRequest } from "agents";
 import {
-  AgentChatStateAdapter,
-  ChatStateAgent,
+  ChatSdkStateAdapter,
   defaultKeyShard,
   defaultThreadShard
-} from "../state";
+} from "agents/chat-sdk";
+import { Message } from "chat";
+import appWorker, { ChatIngressAgent, ConversationAgent } from "../index";
+import { shardTelegramStateKey } from "../provider/telegram";
+
+export { ChatSdkStateAgent } from "agents/chat-sdk";
 
 interface TestLockResult {
   first: boolean;
@@ -145,14 +148,27 @@ export class TestHostAgent extends Agent {
       thread: defaultKeyShard("thread-state:telegram:123:456"),
       channel: defaultKeyShard("channel-state:telegram:123"),
       history: defaultKeyShard("msg-history:telegram:123:456"),
-      dedupe: defaultKeyShard("dedupe:telegram:123:999"),
+      dedupe: shardTelegramStateKey(
+        "dedupe:telegram:123:999",
+        defaultThreadShard
+      ),
       callback: defaultKeyShard("chat:callback:opaque"),
       fallbackThread: defaultThreadShard("telegram:123:456")
     };
   }
 
-  private async createState(): Promise<AgentChatStateAdapter> {
-    const state = new AgentChatStateAdapter({ parent: this });
+  async testConversationFacet(): Promise<string> {
+    await this.subAgent(
+      ConversationAgent,
+      `conversation:${crypto.randomUUID()}`
+    );
+    return "ok";
+  }
+
+  private async createState(): Promise<ChatSdkStateAdapter> {
+    const state = new ChatSdkStateAdapter({
+      parent: this
+    });
     await state.connect();
     return state;
   }
@@ -186,10 +202,13 @@ export class TestHostAgent extends Agent {
   }
 }
 
-export { ChatStateAgent };
+export { ChatIngressAgent, ConversationAgent };
 
 export default {
-  fetch() {
-    return new Response("Not found", { status: 404 });
+  async fetch(request: Request, env: Cloudflare.Env) {
+    return (
+      (await routeAgentRequest(request, env, { cors: true })) ||
+      appWorker.fetch(request, env, {} as ExecutionContext)
+    );
   }
 } satisfies ExportedHandler<Cloudflare.Env>;
