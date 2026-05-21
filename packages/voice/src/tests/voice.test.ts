@@ -77,6 +77,32 @@ function waitForType(ws: WebSocket, type: string) {
   );
 }
 
+function collectMessagesUntil(
+  ws: WebSocket,
+  predicate: (msg: Record<string, unknown>) => boolean,
+  timeout = 5000
+): Promise<Record<string, unknown>[]> {
+  return new Promise((resolve, reject) => {
+    const messages: Record<string, unknown>[] = [];
+    const timer = setTimeout(
+      () => reject(new Error("Timeout collecting messages")),
+      timeout
+    );
+    const handler = (e: MessageEvent) => {
+      if (typeof e.data !== "string") return;
+
+      const msg = JSON.parse(e.data) as Record<string, unknown>;
+      messages.push(msg);
+      if (predicate(msg)) {
+        clearTimeout(timer);
+        ws.removeEventListener("message", handler);
+        resolve(messages);
+      }
+    };
+    ws.addEventListener("message", handler);
+  });
+}
+
 // --- Tests ---
 
 describe("VoiceAgent — protocol", () => {
@@ -634,6 +660,134 @@ async function connectEmptyWS(path: string) {
 }
 
 describe("VoiceAgent — empty response handling", () => {
+  it("does not emit assistant transcript events for an empty stream", async () => {
+    const { ws } = await connectEmptyWS(uniqueEmptyPath());
+    await waitForStatus(ws, "idle");
+
+    sendJSON(ws, {
+      type: "_set_response_mode",
+      value: "empty_stream"
+    });
+    await waitForType(ws, "_ack");
+
+    sendJSON(ws, { type: "start_call" });
+    await waitForStatus(ws, "listening");
+
+    for (let i = 0; i < 4; i++) {
+      ws.send(new ArrayBuffer(5000));
+    }
+
+    const messages = await collectMessagesUntil(
+      ws,
+      (msg) => msg.type === "status" && msg.status === "listening"
+    );
+
+    expect(messages).toContainEqual({
+      type: "error",
+      message: "No response generated"
+    });
+    const types = messages.map((m) => m.type);
+    expect(types).not.toContain("transcript_start");
+    expect(types).not.toContain("transcript_end");
+    expect(types).not.toContain("metrics");
+
+    sendJSON(ws, { type: "_get_message_count" });
+    const count = (await waitForType(ws, "_message_count")) as Record<
+      string,
+      unknown
+    >;
+    expect(count.count).toBe(1);
+
+    ws.close();
+  });
+
+  it("does not emit assistant transcript events for whitespace-only stream", async () => {
+    const { ws } = await connectEmptyWS(uniqueEmptyPath());
+    await waitForStatus(ws, "idle");
+
+    sendJSON(ws, {
+      type: "_set_response_mode",
+      value: "whitespace_stream"
+    });
+    await waitForType(ws, "_ack");
+
+    sendJSON(ws, { type: "start_call" });
+    await waitForStatus(ws, "listening");
+
+    for (let i = 0; i < 4; i++) {
+      ws.send(new ArrayBuffer(5000));
+    }
+
+    const messages = await collectMessagesUntil(
+      ws,
+      (msg) => msg.type === "status" && msg.status === "listening"
+    );
+
+    expect(messages).toContainEqual({
+      type: "error",
+      message: "No response generated"
+    });
+    const types = messages.map((m) => m.type);
+    expect(types).not.toContain("transcript_start");
+    expect(types).not.toContain("transcript_end");
+    expect(types).not.toContain("metrics");
+
+    sendJSON(ws, { type: "_get_message_count" });
+    const count = (await waitForType(ws, "_message_count")) as Record<
+      string,
+      unknown
+    >;
+    expect(count.count).toBe(1);
+
+    ws.close();
+  });
+
+  it("defers assistant transcript start until streamed text is non-empty", async () => {
+    const { ws } = await connectEmptyWS(uniqueEmptyPath());
+    await waitForStatus(ws, "idle");
+
+    sendJSON(ws, {
+      type: "_set_response_mode",
+      value: "leading_whitespace_stream"
+    });
+    await waitForType(ws, "_ack");
+
+    sendJSON(ws, { type: "start_call" });
+    await waitForStatus(ws, "listening");
+
+    for (let i = 0; i < 4; i++) {
+      ws.send(new ArrayBuffer(5000));
+    }
+
+    const messages = await collectMessagesUntil(
+      ws,
+      (msg) => msg.type === "transcript_end"
+    );
+    const assistantMessages = messages.filter((msg) =>
+      ["transcript_start", "transcript_delta", "transcript_end"].includes(
+        msg.type as string
+      )
+    );
+
+    expect(assistantMessages).toEqual([
+      { type: "transcript_start", role: "assistant" },
+      { type: "transcript_delta", text: "   Hello" },
+      { type: "transcript_delta", text: " world." },
+      { type: "transcript_end", text: "   Hello world." }
+    ]);
+
+    await waitForStatus(ws, "listening");
+
+    sendJSON(ws, { type: "_get_message_count" });
+    const count = (await waitForType(ws, "_message_count")) as Record<
+      string,
+      unknown
+    >;
+    expect(count.count).toBe(2);
+
+    ws.close();
+  });
+
   it("sends error and does not save message when onTurn returns empty string", async () => {
     const { ws } = await connectEmptyWS(uniqueEmptyPath());
     await waitForStatus(ws, "idle");
@@ -646,9 +800,18 @@ describe("VoiceAgent — empty response handling", () => {
       ws.send(new ArrayBuffer(5000));
     }
 
-    // Should get an error message about empty response
-    const error = (await waitForType(ws, "error")) as Record<string, unknown>;
-    expect(error.message).toBe("No response generated");
+    // Should get an error message about empty response without creating an
+    // assistant transcript entry.
+    const messages = await collectMessagesUntil(
+      ws,
+      (msg) => msg.type === "error"
+    );
+    expect(messages).toContainEqual({
+      type: "error",
+      message: "No response generated"
+    });
+    expect(messages.map((m) => m.type)).not.toContain("transcript_start");
+    expect(messages.map((m) => m.type)).not.toContain("transcript_end");
 
     // Should go back to listening
     await waitForStatus(ws, "listening");
@@ -677,25 +840,10 @@ describe("VoiceAgent — empty response handling", () => {
     }
 
     // Collect all messages until we get back to listening
-    const messages: Record<string, unknown>[] = [];
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error("Timeout collecting messages")),
-        5000
-      );
-      const handler = (e: MessageEvent) => {
-        if (typeof e.data === "string") {
-          const msg = JSON.parse(e.data);
-          messages.push(msg);
-          if (msg.type === "status" && msg.status === "listening") {
-            clearTimeout(timer);
-            ws.removeEventListener("message", handler);
-            resolve();
-          }
-        }
-      };
-      ws.addEventListener("message", handler);
-    });
+    const messages = await collectMessagesUntil(
+      ws,
+      (msg) => msg.type === "status" && msg.status === "listening"
+    );
 
     // Should NOT have received metrics
     const types = messages.map((m) => m.type);

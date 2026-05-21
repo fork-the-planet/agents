@@ -178,11 +178,32 @@ export class TestEmptyResponseVoiceAgent extends VoiceBase {
 
   transcriber = new TestTranscriber();
   tts = new TestTTS();
+  #responseMode:
+    | "empty_string"
+    | "empty_stream"
+    | "whitespace_stream"
+    | "leading_whitespace_stream" = "empty_string";
 
   async onTurn(
     _transcript: string,
     _context: VoiceTurnContext
-  ): Promise<string> {
+  ): Promise<string | AsyncIterable<string>> {
+    if (this.#responseMode === "empty_stream") {
+      return (async function* () {})();
+    }
+    if (this.#responseMode === "whitespace_stream") {
+      return (async function* () {
+        yield "   ";
+      })();
+    }
+    if (this.#responseMode === "leading_whitespace_stream") {
+      return (async function* () {
+        yield "   ";
+        yield "Hello";
+        yield " world.";
+      })();
+    }
+
     return "";
   }
 
@@ -190,13 +211,28 @@ export class TestEmptyResponseVoiceAgent extends VoiceBase {
     if (typeof message !== "string") return;
     try {
       const parsed = JSON.parse(message);
-      if (parsed.type === "_get_message_count") {
-        connection.send(
-          JSON.stringify({
-            type: "_message_count",
-            count: this.getMessageCount()
-          })
-        );
+      switch (parsed.type) {
+        case "_set_response_mode":
+          if (
+            parsed.value === "empty_string" ||
+            parsed.value === "empty_stream" ||
+            parsed.value === "whitespace_stream" ||
+            parsed.value === "leading_whitespace_stream"
+          ) {
+            this.#responseMode = parsed.value;
+          }
+          connection.send(
+            JSON.stringify({ type: "_ack", command: parsed.type })
+          );
+          break;
+        case "_get_message_count":
+          connection.send(
+            JSON.stringify({
+              type: "_message_count",
+              count: this.getMessageCount()
+            })
+          );
+          break;
       }
     } catch {
       // ignore
