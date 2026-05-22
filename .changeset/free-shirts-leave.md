@@ -1,4 +1,5 @@
 ---
+"@cloudflare/voice-telnyx": patch
 ---
 
-No release is required for this change because it adds a private voice provider package and a private example app. The package is intentionally kept `private: true` to match the existing `voice-providers/*` packages.
+Release the Telnyx voice provider package with STT, TTS, and browser telephony support for Cloudflare Agents voice pipelines.
