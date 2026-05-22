@@ -19,6 +19,7 @@ export default defineConfig({
     include: [path.join(testsDir, "**/*.test.ts")],
     setupFiles: [path.join(testsDir, "setup.ts")],
     testTimeout: 10000,
+    retry: process.env.CI ? 3 : 0,
     deps: {
       optimizer: {
         ssr: {

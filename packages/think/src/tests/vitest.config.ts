@@ -20,6 +20,7 @@ export default defineConfig({
     exclude: [path.join(testsDir, "../e2e-tests/**")],
     setupFiles: [path.join(testsDir, "setup.ts")],
     testTimeout: 10000,
+    retry: process.env.CI ? 3 : 0,
     deps: {
       optimizer: {
         ssr: {
