@@ -1,6 +1,5 @@
 {
   "name": "@cloudflare/voice-telnyx",
-  "private": true,
   "version": "0.0.1",
   "description": "Telnyx STT, TTS, and telephony providers for Cloudflare Agents voice pipeline",
   "repository": {
