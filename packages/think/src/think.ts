@@ -100,6 +100,9 @@ import {
   stepCountIs,
   streamText
 } from "ai";
+import * as skills from "agents/skills";
+import { SkillRegistry } from "agents/skills";
+import type { SkillScriptRunner, SkillSource } from "agents/skills";
 
 // Re-export AI SDK types that appear on Think's public lifecycle hooks
 // so users can import them from a single place.
@@ -112,6 +115,8 @@ export type {
   TypedToolCall,
   TypedToolResult
 } from "ai";
+export { skills };
+export type { SkillRunContext, SkillSource } from "agents/skills";
 import {
   Agent,
   __DO_NOT_USE_WILL_BREAK__agentContext as agentContext
@@ -1180,7 +1185,8 @@ export class Think<
   private static readonly CONFIG_KEYS = [
     "_think_config",
     "lastClientTools",
-    "lastBody"
+    "lastBody",
+    "skillsFingerprint"
   ] as const;
   /**
    * Wait for MCP server connections to be ready before the inference
@@ -1190,6 +1196,9 @@ export class Think<
    * for a custom timeout. Defaults to `false` (no waiting).
    */
   waitForMcpConnections: boolean | { timeout: number } = false;
+
+  private _skillRegistry: SkillRegistry | null = null;
+  private _loggedSkillWarnings = new Set<string>();
 
   /**
    * Controls how overlapping user submit requests behave while another
@@ -1258,6 +1267,15 @@ export class Think<
    */
   workspace!: WorkspaceLike;
 
+  /**
+   * Include the default workspace Bash tool. Enabled by default so models can
+   * run shell-style multi-file workflows against the workspace. Set to `false`
+   * to omit it from the built-in workspace tools.
+   */
+  workspaceBash:
+    | boolean
+    | NonNullable<Parameters<typeof createWorkspaceTools>[1]>["bash"] = true;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
 
@@ -1295,6 +1313,8 @@ export class Think<
             break;
         }
       });
+
+      await this._initializeSkills();
 
       // Force Session to initialize its tables (assistant_messages,
       // assistant_compactions, assistant_config, etc.) so that subsequent
@@ -1844,6 +1864,96 @@ export class Think<
   }
 
   /**
+   * Return Agent Skills sources for this Think agent.
+   *
+   * Bundled skills are typically imported with the Agents Vite plugin:
+   *
+   * ```typescript
+   * import productSkills from "agents:skills"; // -> ./skills next to this file
+   * ```
+   *
+   * Sources are applied in order; the first source to register a skill name
+   * wins, and later collisions are skipped with a logged warning.
+   */
+  getSkills(): SkillSource[] | Promise<SkillSource[]> {
+    return [];
+  }
+
+  private async _initializeSkills(): Promise<void> {
+    // A misconfigured or failing skill source must never prevent the agent
+    // from starting. Any error here is logged and skills stay disabled.
+    try {
+      const sources = await this.getSkills();
+      if (sources.length === 0) return;
+
+      const registry = new SkillRegistry(sources, this.getSkillScriptRunner());
+      await registry.load();
+      this._logSkillWarnings(registry);
+      this._skillRegistry = registry;
+
+      await this.session.addContext(registry.contextLabel, {
+        description: "Think skills: available skill catalog",
+        provider: {
+          get: () => registry.systemPrompt()
+        }
+      });
+
+      const previous = this._configGet("skillsFingerprint");
+      if (previous !== registry.fingerprint) {
+        await this.session.refreshSystemPrompt();
+        this._configSet("skillsFingerprint", registry.fingerprint);
+      }
+    } catch (error) {
+      console.warn(
+        `[think] Failed to initialize skills; continuing without them: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  /**
+   * Log registry diagnostics (duplicate names, sources that failed to list),
+   * deduped by message so a new collision after a deploy still surfaces while
+   * the same warning is not repeated on every turn.
+   */
+  private _logSkillWarnings(registry: SkillRegistry): void {
+    for (const warning of registry.warnings) {
+      if (this._loggedSkillWarnings.has(warning)) continue;
+      this._loggedSkillWarnings.add(warning);
+      console.warn(`[think] ${warning}`);
+    }
+  }
+
+  /**
+   * Return an optional runner that enables the `run_skill_script` tool.
+   *
+   * @experimental Skill script execution is experimental and may change
+   * before stabilizing.
+   */
+  getSkillScriptRunner(): SkillScriptRunner | null {
+    return null;
+  }
+
+  private async _refreshSkillsIfChanged(): Promise<void> {
+    if (!this._skillRegistry) return;
+
+    // Refreshing pulls from live sources (e.g. R2); a transient failure must
+    // not break the turn. Keep the last good catalog on error.
+    try {
+      await this._skillRegistry.refresh();
+      this._logSkillWarnings(this._skillRegistry);
+      const previous = this._configGet("skillsFingerprint");
+      if (previous !== this._skillRegistry.fingerprint) {
+        await this.session.refreshSystemPrompt();
+        this._configSet("skillsFingerprint", this._skillRegistry.fingerprint);
+      }
+    } catch (error) {
+      console.warn(
+        `[think] Failed to refresh skills; using last known catalog: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  /**
    * Return sandboxed extension configurations. Defines load order,
    * which determines hook execution order.
    * Requires `extensionLoader` to be set.
@@ -2118,16 +2228,21 @@ export class Think<
       await this.mcp.waitForConnections({ timeout });
     }
 
-    const workspaceTools = createWorkspaceTools(this.workspace);
+    const workspaceTools = createWorkspaceTools(this.workspace, {
+      bash: this.workspaceBash
+    });
     const baseTools = this.getTools();
     const extensionTools = this.extensionManager?.getTools() ?? {};
+    await this._refreshSkillsIfChanged();
     const contextTools = await this.session.tools();
+    const skillTools = this._skillRegistry?.tools() ?? {};
     const clientToolSet = createToolsFromClientSchemas(input.clientTools);
     const tools: ToolSet = {
       ...workspaceTools,
       ...baseTools,
       ...extensionTools,
       ...contextTools,
+      ...skillTools,
       ...(this.mcp?.getAITools?.() ?? {}),
       ...clientToolSet
     };

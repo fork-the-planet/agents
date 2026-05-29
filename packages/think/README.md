@@ -149,9 +149,15 @@ drill-in, and cleanup patterns.
 
 ## Built-in workspace
 
-Every Think agent gets `this.workspace` — a virtual filesystem backed by the DO's SQLite storage. Workspace tools (`read`, `write`, `edit`, `list`, `find`, `grep`, `delete`) are automatically available to the model.
+Every Think agent gets `this.workspace` — a virtual filesystem backed by the DO's SQLite storage. Workspace tools (`read`, `write`, `edit`, `list`, `find`, `grep`, `delete`, `bash`) are automatically available to the model.
 
 The `read` tool returns line-numbered text for text files. For images and PDFs, it keeps the persisted tool result compact and passes file bytes to multimodal-capable models using AI SDK content parts.
+The `bash` tool runs sandboxed shell workflows through `just-bash`, with network
+access disabled by default, and syncs changed files and empty directories back
+into the workspace. It snapshots up to 1,000 files by default, skips files larger
+than 1 MB, and treats skipped paths as protected during write-back. Set
+`workspaceBash = false` on your Think subclass to opt out, or pass an options
+object to tune limits, timeout, and network access.
 
 ```ts
 export class MyAgent extends Think<Env> {
@@ -173,6 +179,118 @@ export class MyAgent extends Think<Env> {
 }
 ```
 
+## Agent Skills
+
+Think supports the [Agent Skills](https://agentskills.io/) directory format as
+a first-class API. Return one or more `SkillSource` objects from `getSkills()`;
+Think adds the skill catalog to the prompt and exposes `activate_skill` and
+`read_skill_resource` tools when skills are available.
+
+```ts
+import { Think, skills } from "@cloudflare/think";
+import bundledSkills from "agents:skills"; // resolves to ./skills next to this file
+
+type Env = {
+  AI: Ai;
+  LOADER: WorkerLoader;
+  SKILLS_BUCKET: R2Bucket;
+};
+
+export class MyAgent extends Think<Env> {
+  getSkills() {
+    return [
+      bundledSkills,
+      skills.r2(this.env.SKILLS_BUCKET, { prefix: "skills/" })
+    ];
+  }
+
+  getSkillScriptRunner() {
+    return skills.runner({
+      loader: this.env.LOADER,
+      workspaceInstance: this.workspace
+    });
+  }
+}
+```
+
+Bundled skills use the Agents Vite plugin. The `agents:skills` specifier
+resolves to a `./skills` directory next to the importing file; use
+`agents:skills/<dir>` for a differently named sibling directory:
+
+```ts
+import bundledSkills from "agents:skills";
+```
+
+The import is typed by ambient declarations shipped with `agents` (importing
+`Think`, which pulls in `agents`, is enough; otherwise add
+`/// <reference types="agents/skills-module" />`). Without the Vite plugin,
+construct a source with `skills.fromManifest(...)`. Sources are applied in
+order: the first to register a skill name wins, and duplicate or failing
+sources are skipped with a warning instead of failing the agent.
+
+The skills engine itself lives in `agents/skills` (so any agent, including a
+plain `@cloudflare/ai-chat` `onChatMessage`, can build a `SkillRegistry`);
+`@cloudflare/think` re-exports it as `skills` and wires `getSkills()` into the
+turn automatically.
+
+The imported directory should contain one child directory per skill:
+
+```text
+src/skills/release-notes/SKILL.md
+src/skills/release-notes/scripts/format-release-notes.ts
+src/skills/release-notes/references/style-guide.md
+```
+
+Bundled resources are packaged with explicit `encoding` metadata. Text resources
+are returned directly; binary assets are returned as base64. `read_skill_resource`
+can read `{ name, path }` or a qualified path such as
+`release-notes/references/style-guide.md`, which helps skills reference resources
+from other skills.
+
+Skills are on-demand instructions, not always-on system prompt text. The model
+sees the catalog first, then calls `activate_skill` when a user task matches a
+skill description. Use `getSystemPrompt()` or a Session context block for
+behavior that should apply to every turn.
+
+Script execution is opt-in and **experimental**. `getSkillScriptRunner()`
+enables `run_skill_script`, which can run JavaScript, TypeScript, Python, and
+Bash scripts under `scripts/`.
+
+JavaScript and TypeScript scripts are function-style:
+
+```ts
+import type { SkillRunContext } from "@cloudflare/think";
+
+export default async function run(input: unknown, ctx: SkillRunContext) {
+  const guide = ctx.files["references/style-guide.md"]; // bundled text resources
+  const summary = await ctx.tools.call("summarize", { input }); // explicit tools
+  await ctx.output.writeFile("notes.md", summary); // scratch artifact
+  return { ok: true };
+}
+```
+
+`ctx` is `{ skill, files, workspace, tools, output }`: `ctx.files` holds bundled
+text resources by relative path, `ctx.workspace` is gated by the workspace
+permission, `ctx.tools` exposes only the tools the runner was given, and
+`ctx.output.writeFile(name, content)` returns scratch artifacts without mutating
+the workspace. Python and Bash scripts instead use the path-based contract:
+`/input.json`, `/context.json`, bundled resources under `/skill`, and `/output`
+for artifacts (Python supports both `def run(input, ctx)` and CLI-style scripts).
+
+If `workspaceInstance` is provided, scripts get read-only workspace access by
+default. Workspace writes, tools, and network access are opt-in. Scripts default
+to a 30 second timeout, which can be overridden with `timeout`. TypeScript
+scripts are compiled with `@cloudflare/worker-bundler`; Python scripts run as
+Python Dynamic Workers; Bash scripts run through `just-bash`.
+
+Script execution requires a Worker Loader binding:
+
+```jsonc
+{
+  "worker_loaders": [{ "binding": "LOADER" }]
+}
+```
+
 ## Exports
 
 | Export                                  | Description                                                   |
@@ -189,20 +307,23 @@ export class MyAgent extends Think<Env> {
 
 ### Configuration
 
-| Method / Property      | Default                            | Description                                     |
-| ---------------------- | ---------------------------------- | ----------------------------------------------- |
-| `getModel()`           | throws                             | Return the `LanguageModel` to use               |
-| `getSystemPrompt()`    | careful assistant operating prompt | System prompt (fallback when no context blocks) |
-| `getTools()`           | `{}`                               | AI SDK `ToolSet` for the agentic loop           |
-| `getMessengers()`      | `{}`                               | Messenger ingress and delivery declarations     |
-| `getScheduledTasks()`  | `{}`                               | Code-declared recurring prompts                 |
-| `getDefaultTimezone()` | `undefined`                        | Default timezone for wall-clock schedules       |
-| `maxSteps`             | `10`                               | Max tool-call rounds per turn (property)        |
-| `sendReasoning`        | `true`                             | Send reasoning chunks to chat clients           |
-| `configureSession()`   | identity                           | Add context blocks, compaction, search, skills  |
-| `getExtensions()`      | `[]`                               | Sandboxed extension declarations (load order)   |
-| `extensionLoader`      | `undefined`                        | `WorkerLoader` binding — enables extensions     |
-| `chatRecovery`         | `true`                             | Wrap turns in `runFiber` for durable execution  |
+| Method / Property        | Default                            | Description                                     |
+| ------------------------ | ---------------------------------- | ----------------------------------------------- |
+| `getModel()`             | throws                             | Return the `LanguageModel` to use               |
+| `getSystemPrompt()`      | careful assistant operating prompt | System prompt (fallback when no context blocks) |
+| `getTools()`             | `{}`                               | AI SDK `ToolSet` for the agentic loop           |
+| `getMessengers()`        | `{}`                               | Messenger ingress and delivery declarations     |
+| `getScheduledTasks()`    | `{}`                               | Code-declared recurring prompts                 |
+| `getDefaultTimezone()`   | `undefined`                        | Default timezone for wall-clock schedules       |
+| `maxSteps`               | `10`                               | Max tool-call rounds per turn (property)        |
+| `sendReasoning`          | `true`                             | Send reasoning chunks to chat clients           |
+| `configureSession()`     | identity                           | Add context blocks, compaction, search, skills  |
+| `getSkills()`            | `[]`                               | First-class Agent Skills sources                |
+| `getSkillScriptRunner()` | `null`                             | Optional runner for `run_skill_script`          |
+| `getExtensions()`        | `[]`                               | Sandboxed extension declarations (load order)   |
+| `extensionLoader`        | `undefined`                        | `WorkerLoader` binding — enables extensions     |
+| `workspaceBash`          | `true`                             | Include the default workspace `bash` tool       |
+| `chatRecovery`           | `true`                             | Wrap turns in `runFiber` for durable execution  |
 
 On each turn, Think appends a small capability block to the assembled system prompt. The block is based on the tools available for that turn, so models learn about workspace tools, context-loading tools, extension tools, sandboxed execution, MCP/client tools, and delegated-agent tools only when they are actually exposed.
 
@@ -488,9 +609,13 @@ session.removeContext("notes");
 await session.refreshSystemPrompt();
 ```
 
-#### Skills
+#### Legacy Session Skills
 
-Skills support load/unload for explicit context management:
+Session still supports lower-level loadable context providers. Prefer the
+first-class Think skills API (`getSkills()`, `activate_skill`, and
+`read_skill_resource`) for new Agent Skills directories. Use Session skill
+providers only when you need generic `load_context` / `unload_context`
+management instead of Think's skills workflow.
 
 ```ts
 import { R2SkillProvider } from "agents/experimental/memory/session";
@@ -502,7 +627,6 @@ configureSession(session: Session) {
     })
     .withCachedPrompt();
 }
-// Model gets load_context and unload_context tools automatically
 ```
 
 ### MCP integration
@@ -605,6 +729,7 @@ import { createWorkspaceTools } from "@cloudflare/think/tools/workspace";
 
 // Use with a custom ReadOperations/WriteOperations implementation
 const tools = createWorkspaceTools(myCustomStorage);
+const toolsWithoutBash = createWorkspaceTools(myCustomStorage, { bash: false });
 ```
 
 Each tool is an AI SDK `tool()` with Zod schemas. The underlying operations are abstracted behind interfaces (`ReadOperations`, `WriteOperations`, etc.) so you can create tools backed by any storage.
@@ -643,16 +768,18 @@ getTools() {
 }
 ```
 
-## Peer dependencies
+## Runtime dependencies
 
-| Package                  | Required | Notes                            |
-| ------------------------ | -------- | -------------------------------- |
-| `agents`                 | yes      | Cloudflare Agents SDK            |
-| `ai`                     | yes      | Vercel AI SDK v6                 |
-| `zod`                    | yes      | Schema validation (v4)           |
-| `@cloudflare/shell`      | yes      | Workspace filesystem             |
-| `@cloudflare/codemode`   | optional | For `createExecuteTool`          |
-| `@chat-adapter/telegram` | optional | Required for Telegram messengers |
+| Package                      | Notes                                                     |
+| ---------------------------- | --------------------------------------------------------- |
+| `agents`                     | Cloudflare Agents SDK peer dependency                     |
+| `ai`                         | Vercel AI SDK v6 peer dependency                          |
+| `zod`                        | Schema validation peer dependency                         |
+| `@cloudflare/shell`          | Workspace filesystem                                      |
+| `@cloudflare/codemode`       | Code execution, `createExecuteTool`, and JS skill scripts |
+| `@cloudflare/worker-bundler` | TypeScript skill script compilation                       |
+| `just-bash`                  | Bash skill script execution                               |
+| `@chat-adapter/telegram`     | Required for Telegram messengers                          |
 
 ## Acknowledgments
 
