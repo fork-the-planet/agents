@@ -255,23 +255,23 @@ with retries per step, long waits, external events, or approvals.
 
 ## Configuration Overrides
 
-| Method / Property        | Default                          | Description                                                                     |
-| ------------------------ | -------------------------------- | ------------------------------------------------------------------------------- |
-| `getModel()`             | throws                           | Return the `LanguageModel` to use                                               |
-| `getSystemPrompt()`      | `"You are a helpful assistant."` | System prompt (fallback when no context blocks)                                 |
-| `getTools()`             | `{}`                             | AI SDK `ToolSet` for the agentic loop                                           |
-| `getScheduledTasks()`    | `{}`                             | Code-declared recurring prompts or handlers                                     |
-| `getDefaultTimezone()`   | `undefined`                      | Default timezone for wall-clock scheduled tasks                                 |
-| `getMessengers()`        | `{}`                             | Messenger ingress and delivery declarations — see [Messengers](./messengers.md) |
-| `maxSteps`               | `10`                             | Max tool-call rounds per turn                                                   |
-| `sendReasoning`          | `true`                           | Send reasoning chunks to chat clients                                           |
-| `configureSession()`     | identity                         | Add context blocks, compaction, search, skills — see [Sessions](../sessions.md) |
-| `getSkills()`            | `[]`                             | Return Agent Skills sources for on-demand skill activation                      |
-| `getSkillScriptRunner()` | `null`                           | Enable the optional `run_skill_script` tool                                     |
-| `workspaceBash`          | `true`                           | Include or configure the default workspace `bash` tool                          |
-| `messageConcurrency`     | `"queue"`                        | How overlapping submits behave — see [Client Tools](./client-tools.md)          |
-| `waitForMcpConnections`  | `false`                          | Wait for MCP servers before inference                                           |
-| `chatRecovery`           | `true`                           | Wrap turns in `runFiber` for durable execution, including sub-agent turns       |
+| Method / Property        | Default                          | Description                                                                                                                                                                  |
+| ------------------------ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `getModel()`             | throws                           | Return the `LanguageModel` to use                                                                                                                                            |
+| `getSystemPrompt()`      | `"You are a helpful assistant."` | System prompt (fallback when no context blocks)                                                                                                                              |
+| `getTools()`             | `{}`                             | AI SDK `ToolSet` for the agentic loop                                                                                                                                        |
+| `getScheduledTasks()`    | `{}`                             | Code-declared recurring prompts or handlers                                                                                                                                  |
+| `getDefaultTimezone()`   | `undefined`                      | Default timezone for wall-clock scheduled tasks                                                                                                                              |
+| `getMessengers()`        | `{}`                             | Messenger ingress and delivery declarations — see [Messengers](./messengers.md)                                                                                              |
+| `maxSteps`               | `10`                             | Max tool-call rounds per turn                                                                                                                                                |
+| `sendReasoning`          | `true`                           | Send reasoning chunks to chat clients                                                                                                                                        |
+| `configureSession()`     | identity                         | Add context blocks, compaction, search, skills — see [Sessions](../sessions.md)                                                                                              |
+| `getSkills()`            | `[]`                             | Return Agent Skills sources for on-demand skill activation                                                                                                                   |
+| `getSkillScriptRunner()` | `null`                           | Enable the optional `run_skill_script` tool                                                                                                                                  |
+| `workspaceBash`          | `true`                           | Include or configure the default workspace `bash` tool                                                                                                                       |
+| `messageConcurrency`     | `"queue"`                        | How overlapping submits behave — see [Client Tools](./client-tools.md)                                                                                                       |
+| `waitForMcpConnections`  | `false`                          | Wait for MCP servers before inference                                                                                                                                        |
+| `chatRecovery`           | `true`                           | Wrap turns in `runFiber` for durable execution, including sub-agent turns. Set to `{ maxAttempts, stableTimeoutMs, terminalMessage, onExhausted }` to tune bounded recovery. |
 
 ## Agent Skills
 
@@ -385,6 +385,35 @@ instead: `/input.json`, `/context.json`, bundled resources under `/skill`, and
 Passing `workspaceInstance` gives scripts read-only workspace access by default.
 Network access, tools, and workspace writes are opt-in. The default timeout is
 30 seconds.
+
+### Chat Recovery
+
+Think wraps chat turns in recoverable fibers by default. If the Durable Object is evicted mid-stream, Think reconstructs any buffered chunks, persists partial output, and schedules either a continuation of the assistant turn or a retry of the unanswered user turn.
+
+Override `onChatRecovery` when you need provider-specific recovery, such as retrieving a stored OpenAI Responses result instead of issuing a new model call:
+
+```typescript
+import type {
+  ChatRecoveryContext,
+  ChatRecoveryOptions
+} from "@cloudflare/think";
+
+export class MyAgent extends Think<Env> {
+  override chatRecovery = {
+    maxAttempts: 6,
+    terminalMessage: "The assistant was interrupted. Please try again."
+  };
+
+  override async onChatRecovery(
+    ctx: ChatRecoveryContext
+  ): Promise<ChatRecoveryOptions> {
+    console.log("Recovering chat turn", ctx.incidentId, ctx.attempt);
+    return {}; // persist partial output and continue/retry when possible
+  }
+}
+```
+
+The same recovery events are available through `agents/observability` on the `chat` channel. Transcript repairs are emitted on the `transcript` channel.
 
 ## Dynamic Configuration
 
