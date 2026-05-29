@@ -1519,6 +1519,34 @@ export class ChatRecoveryTestAgent extends AIChatAgent<Env> {
 
   recoveryShouldThrow = false;
   onExhaustedCalls = 0;
+  private _simulateSupersededIsolate = false;
+
+  /**
+   * Simulate the recovery continuation alarm firing on a SUPERSEDED isolate:
+   * the first storage op throws the catchable
+   * `Durable Object reset because its code was updated.` for the whole
+   * invocation. Used to reproduce the scheduled-callback abandonment path that
+   * #1615's `_beginChatRecoveryIncident` progress logic cannot reach.
+   */
+  _supersededThrows = 0;
+
+  override async _chatRecoveryContinue(
+    ...args: Parameters<AIChatAgent<Env>["_chatRecoveryContinue"]>
+  ): Promise<void> {
+    if (this._simulateSupersededIsolate) {
+      this._supersededThrows += 1;
+      throw new Error("Durable Object reset because its code was updated.");
+    }
+    return super._chatRecoveryContinue(...args);
+  }
+
+  setSimulateSupersededIsolateForTest(value: boolean): void {
+    this._simulateSupersededIsolate = value;
+  }
+
+  getSupersededThrowsForTest(): number {
+    return this._supersededThrows;
+  }
 
   override async onChatRecovery(
     ctx: ChatRecoveryContext
@@ -1748,6 +1776,27 @@ export class ChatRecoveryTestAgent extends AIChatAgent<Env> {
       WHERE callback = ${callback}
     `;
     return rows[0]?.count ?? 0;
+  }
+
+  getRunFiberCountForTest(): number {
+    const rows = this.sql<{ count: number }>`
+      SELECT COUNT(*) as count FROM cf_agents_runs
+    `;
+    return rows[0]?.count ?? 0;
+  }
+
+  /**
+   * Run the real DO alarm handler (schedule dispatch + one-shot row delete).
+   * Swallows a thrown alarm the way the platform does — workerd absorbs a
+   * rejected alarm and retries it later under the at-least-once guarantee — so
+   * tests can inspect the post-alarm state.
+   */
+  async runAlarmForTest(): Promise<void> {
+    try {
+      await (this as unknown as { alarm(): Promise<void> }).alarm();
+    } catch {
+      // Platform absorbs and retries; intentionally swallowed for inspection.
+    }
   }
 
   async waitForIdleForTest(): Promise<void> {
