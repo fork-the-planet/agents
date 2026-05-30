@@ -5797,6 +5797,11 @@ export class Think<
         messagesPersisted,
         error: errorMessage
       });
+      // Persist the terminal error before broadcasting it: the broadcast is
+      // transient, so a client disconnected at this moment (a pre-stream
+      // failure like message reconciliation) would otherwise never learn the
+      // turn failed and stay frozen on reconnect (see `_buildIdleConnectMessages`).
+      await this._recordTerminalChatStatus("error", requestId, errorMessage);
       this._broadcastChat({
         type: MSG_CHAT_RESPONSE,
         id: requestId,
@@ -5926,8 +5931,7 @@ export class Think<
 
     try {
       this._insideInferenceLoop = true;
-      let chunksSinceFlush = 0;
-      let hasFlushedContent = false;
+      const flushState = { chunksSinceFlush: 0, hasFlushedContent: false };
       try {
         for await (const chunk of result.toUIMessageStream()) {
           if (abortSignal?.aborted) {
@@ -5955,19 +5959,7 @@ export class Think<
           }
 
           const chunkBody = JSON.stringify(chunk);
-          this._resumableStream.storeChunk(streamId, chunkBody);
-          chunksSinceFlush++;
-          if (
-            this._shouldFlushRpcStreamChunk(
-              streamChunk,
-              chunksSinceFlush,
-              hasFlushedContent
-            )
-          ) {
-            this._resumableStream.flushBuffer();
-            chunksSinceFlush = 0;
-            hasFlushedContent = true;
-          }
+          this._storeChunkDurably(streamId, streamChunk, chunkBody, flushState);
           this._broadcastChat({
             type: MSG_CHAT_RESPONSE,
             id: requestId,
@@ -6081,21 +6073,62 @@ export class Think<
     }
   }
 
-  private _shouldFlushRpcStreamChunk(
+  /**
+   * Whether storing this chunk should immediately flush the resumable-stream
+   * buffer to SQLite.
+   *
+   * A settled tool result (`tool-output-available` / `tool-output-error`)
+   * captures a completed, often non-idempotent side effect, so it is flushed
+   * **immediately** — an isolate eviction (deploy) before the next batch flush
+   * would otherwise lose it, and recovery would re-anchor without it and re-run
+   * the already-completed tool call. Frequent recoverable content (text /
+   * reasoning / tool-input streaming) is throttled to avoid write amplification.
+   */
+  private _shouldFlushRecoverableChunk(
     chunk: StreamChunkData,
     chunksSinceFlush: number,
     hasFlushedContent: boolean
   ): boolean {
-    const isRecoverableContent =
+    if (
+      chunk.type === "tool-output-available" ||
+      chunk.type === "tool-output-error"
+    ) {
+      return true;
+    }
+    const isThrottledRecoverable =
       chunk.type === "text-delta" ||
       chunk.type === "reasoning-delta" ||
-      chunk.type === "tool-input-available" ||
-      chunk.type === "tool-output-available" ||
-      chunk.type === "tool-output-error";
-
+      chunk.type === "tool-input-available";
     return (
-      isRecoverableContent && (!hasFlushedContent || chunksSinceFlush >= 10)
+      isThrottledRecoverable && (!hasFlushedContent || chunksSinceFlush >= 10)
     );
+  }
+
+  /**
+   * Store a stream chunk, flushing settled tool results durably and promptly.
+   * Shared by the WebSocket and sub-agent RPC streaming paths so both get
+   * tool-call-level recovery durability (recovery loses at most the in-flight
+   * step, never an already-completed tool call).
+   */
+  private _storeChunkDurably(
+    streamId: string,
+    chunk: StreamChunkData,
+    chunkBody: string,
+    state: { chunksSinceFlush: number; hasFlushedContent: boolean }
+  ): void {
+    this._resumableStream.storeChunk(streamId, chunkBody);
+    state.chunksSinceFlush++;
+    if (
+      this._shouldFlushRecoverableChunk(
+        chunk,
+        state.chunksSinceFlush,
+        state.hasFlushedContent
+      )
+    ) {
+      this._resumableStream.flushBuffer();
+      state.chunksSinceFlush = 0;
+      state.hasFlushedContent = true;
+    }
   }
 
   private async _streamResult(
@@ -6129,6 +6162,7 @@ export class Think<
     let streamAborted = false;
     let streamError: string | undefined;
     let output: unknown;
+    const flushState = { chunksSinceFlush: 0, hasFlushedContent: false };
 
     try {
       this._insideInferenceLoop = true;
@@ -6139,9 +6173,8 @@ export class Think<
             break;
           }
 
-          const { action } = accumulator.applyChunk(
-            chunk as unknown as StreamChunkData
-          );
+          const streamChunk = chunk as unknown as StreamChunkData;
+          const { action } = accumulator.applyChunk(streamChunk);
 
           if (action?.type === "error") {
             streamError = action.error;
@@ -6160,7 +6193,7 @@ export class Think<
           }
 
           const chunkBody = JSON.stringify(chunk);
-          this._resumableStream.storeChunk(streamId, chunkBody);
+          this._storeChunkDurably(streamId, streamChunk, chunkBody, flushState);
           this._broadcastChat({
             type: MSG_CHAT_RESPONSE,
             id: requestId,
@@ -6906,10 +6939,27 @@ export class Think<
           "skipped",
           "continue_disabled"
         );
+        const disabledMessage =
+          "Submission was interrupted and chat recovery was disabled.";
         await this._markRecoveredSubmissionInterrupted(
           requestId,
-          "Submission was interrupted and chat recovery was disabled."
+          disabledMessage
         );
+        // Unlike `conversation_changed` (a newer turn owns the UI, so silence
+        // is correct), disabling recovery abandons the turn with no superseding
+        // turn. Surface it like exhaustion so a reconnecting client isn't frozen.
+        await this._recordTerminalChatStatus(
+          "interrupted",
+          requestId,
+          disabledMessage
+        );
+        this._broadcastChat({
+          type: MSG_CHAT_RESPONSE,
+          id: requestId,
+          body: disabledMessage,
+          done: true,
+          error: true
+        });
       } else {
         await this._updateChatRecoveryIncident(
           incident.incidentId,
