@@ -541,16 +541,16 @@ export class TestChatAgent extends AIChatAgent<Env> {
     return this._startStream(requestId);
   }
 
-  testStoreStreamChunk(streamId: string, body: string): void {
-    this._storeStreamChunk(streamId, body);
+  async testStoreStreamChunk(streamId: string, body: string): Promise<void> {
+    await this._storeStreamChunk(streamId, body);
   }
 
-  testBroadcastLiveChunk(
+  async testBroadcastLiveChunk(
     requestId: string,
     streamId: string,
     body: string
-  ): void {
-    this._storeStreamChunk(streamId, body);
+  ): Promise<void> {
+    await this._storeStreamChunk(streamId, body);
     const message: OutgoingMessage = {
       body,
       done: false,
@@ -1594,15 +1594,71 @@ export class ChatRecoveryTestAgent extends AIChatAgent<Env> {
     this.chatRecovery = config;
   }
 
+  /** Stream content (which advances progress at production time) then re-persist
+   *  the same orphan, reading the recovery-progress counter at each step.
+   *  Proves progress advances on new content but NOT on a reconnect/recovery
+   *  re-persist (#1637 reconnect-immunity). */
+  async probeProgressReconnectImmunityForTest(): Promise<{
+    start: number;
+    afterFlush: number;
+    afterPersist: number;
+  }> {
+    const self = this as unknown as {
+      _resumableStream: { start(id: string): string };
+      _storeStreamChunk(streamId: string, body: string): Promise<void>;
+      _persistOrphanedStream(streamId: string): Promise<void>;
+    };
+    const read = async (): Promise<number> =>
+      (await this.ctx.storage.get<number>("cf:chat-recovery:progress")) ?? 0;
+
+    const start = await read();
+    const streamId = self._resumableStream.start("req-progress-immunity");
+    await self._storeStreamChunk(
+      streamId,
+      JSON.stringify({ type: "text-start", id: "t" })
+    );
+    await self._storeStreamChunk(
+      streamId,
+      JSON.stringify({
+        type: "tool-input-available",
+        toolCallId: "tc1",
+        toolName: "x",
+        input: {}
+      })
+    );
+    await self._storeStreamChunk(
+      streamId,
+      JSON.stringify({
+        type: "tool-output-available",
+        toolCallId: "tc1",
+        output: { ok: true }
+      })
+    );
+    const afterFlush = await read();
+
+    // A recovery/reconnect persist of the same already-streamed content must
+    // NOT be miscounted as new forward progress.
+    await self._persistOrphanedStream(streamId);
+    const afterPersist = await read();
+
+    return { start, afterFlush, afterPersist };
+  }
+
   async beginIncidentForTest(input: {
     requestId: string;
     recoveryRootRequestId?: string | null;
     latestUserMessageId?: string | null;
     recoveryKind: "retry" | "continue";
-  }): Promise<{ incidentId: string; attempt: number; exhausted: boolean }> {
+    nowMs?: number;
+  }): Promise<{
+    incidentId: string;
+    attempt: number;
+    exhausted: boolean;
+    reason?: string;
+  }> {
     const self = this as unknown as {
       _beginChatRecoveryIncident(i: typeof input): Promise<{
-        incident: { incidentId: string; attempt: number };
+        incident: { incidentId: string; attempt: number; reason?: string };
         exhausted: boolean;
       }>;
     };
@@ -1611,8 +1667,19 @@ export class ChatRecoveryTestAgent extends AIChatAgent<Env> {
     return {
       incidentId: incident.incidentId,
       attempt: incident.attempt,
-      exhausted
+      exhausted,
+      reason: incident.reason
     };
+  }
+
+  /** Push an incident's `lastAttemptAt` back so a subsequent real-time recovery
+   *  isn't collapsed by alarm-debounce (#1637). */
+  async ageIncidentForTest(incidentId: string, ms: number): Promise<void> {
+    const key = `cf:chat-recovery:incident:${encodeURIComponent(incidentId)}`;
+    const inc = await this.ctx.storage.get<{ lastAttemptAt: number }>(key);
+    if (!inc) return;
+    inc.lastAttemptAt -= ms;
+    await this.ctx.storage.put(key, inc);
   }
 
   async updateIncidentForTest(

@@ -3444,11 +3444,11 @@ export class ThinkRecoveryTestAgent extends Think {
         chunk: unknown,
         chunkBody: string,
         state: { chunksSinceFlush: number; hasFlushedContent: boolean }
-      ): void;
+      ): Promise<void>;
     };
     const streamId = self._resumableStream.start("req-tool-durability");
     const state = { chunksSinceFlush: 0, hasFlushedContent: false };
-    const store = (chunk: Record<string, unknown>): void =>
+    const store = (chunk: Record<string, unknown>): Promise<void> =>
       self._storeChunkDurably(streamId, chunk, JSON.stringify(chunk), state);
     const rawCount = (): number => {
       const rows = this.sql<{ count: number }>`
@@ -3458,16 +3458,66 @@ export class ThinkRecoveryTestAgent extends Think {
       return rows[0]?.count ?? 0;
     };
 
-    store({ type: "text-delta", id: "t", delta: "hello " });
-    store({ type: "text-delta", id: "t", delta: "there" });
+    await store({ type: "text-delta", id: "t", delta: "hello " });
+    await store({ type: "text-delta", id: "t", delta: "there" });
     const bufferedTextCount = rawCount();
-    store({
+    await store({
       type: "tool-output-available",
       toolCallId: "tc1",
       output: { ok: true }
     });
     const afterToolOutputCount = rawCount();
     return { bufferedTextCount, afterToolOutputCount };
+  }
+
+  /** Stream content (which durably flushes) then re-persist the same orphan,
+   *  reading the recovery-progress counter at each step. Proves the production-
+   *  time signal advances on new content but NOT on a reconnect/recovery
+   *  re-persist (#1637 reconnect-immunity). */
+  async probeProgressReconnectImmunityForTest(): Promise<{
+    start: number;
+    afterFlush: number;
+    afterPersist: number;
+  }> {
+    const self = this as unknown as {
+      _resumableStream: { start(id: string): string };
+      _storeChunkDurably(
+        streamId: string,
+        chunk: unknown,
+        chunkBody: string,
+        state: { chunksSinceFlush: number; hasFlushedContent: boolean }
+      ): Promise<void>;
+      _persistOrphanedStream(streamId: string): Promise<void>;
+    };
+    const read = async (): Promise<number> =>
+      (await this.ctx.storage.get<number>("cf:chat-recovery:progress")) ?? 0;
+
+    const start = await read();
+    const streamId = self._resumableStream.start("req-progress-immunity");
+    const state = { chunksSinceFlush: 0, hasFlushedContent: false };
+    const store = (chunk: Record<string, unknown>): Promise<void> =>
+      self._storeChunkDurably(streamId, chunk, JSON.stringify(chunk), state);
+
+    await store({ type: "text-delta", id: "t", delta: "hello" });
+    await store({
+      type: "tool-input-available",
+      toolCallId: "tc1",
+      toolName: "x",
+      input: {}
+    });
+    await store({
+      type: "tool-output-available",
+      toolCallId: "tc1",
+      output: { ok: true }
+    });
+    const afterFlush = await read();
+
+    // A recovery/reconnect persist of the same already-streamed content must
+    // NOT be miscounted as new forward progress.
+    await self._persistOrphanedStream(streamId);
+    const afterPersist = await read();
+
+    return { start, afterFlush, afterPersist };
   }
 
   /** Seed a session that ends in a PARTIAL assistant message (the state a
@@ -3605,10 +3655,16 @@ export class ThinkRecoveryTestAgent extends Think {
     recoveryRootRequestId?: string | null;
     latestUserMessageId?: string | null;
     recoveryKind: "retry" | "continue";
-  }): Promise<{ incidentId: string; attempt: number; exhausted: boolean }> {
+    nowMs?: number;
+  }): Promise<{
+    incidentId: string;
+    attempt: number;
+    exhausted: boolean;
+    reason?: string;
+  }> {
     const self = this as unknown as {
       _beginChatRecoveryIncident(i: typeof input): Promise<{
-        incident: { incidentId: string; attempt: number };
+        incident: { incidentId: string; attempt: number; reason?: string };
         exhausted: boolean;
       }>;
     };
@@ -3617,8 +3673,20 @@ export class ThinkRecoveryTestAgent extends Think {
     return {
       incidentId: incident.incidentId,
       attempt: incident.attempt,
-      exhausted
+      exhausted,
+      reason: incident.reason
     };
+  }
+
+  /** Push an incident's `lastAttemptAt` back so a subsequent real-time recovery
+   *  isn't collapsed by alarm-debounce (#1637) — lets flow tests simulate
+   *  genuinely-separate interruptions without real delays. */
+  async ageIncidentForTest(incidentId: string, ms: number): Promise<void> {
+    const key = `cf:chat-recovery:incident:${encodeURIComponent(incidentId)}`;
+    const inc = await this.ctx.storage.get<{ lastAttemptAt: number }>(key);
+    if (!inc) return;
+    inc.lastAttemptAt -= ms;
+    await this.ctx.storage.put(key, inc);
   }
 
   async updateIncidentForTest(

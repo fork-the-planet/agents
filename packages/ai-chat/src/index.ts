@@ -112,6 +112,14 @@ type ChatRecoveryIncident = {
     | "failed";
   firstSeenAt: number;
   lastAttemptAt: number;
+  /**
+   * Epoch ms of the last attempt that observed forward progress. The recovery
+   * budget is keyed to this (`now - lastProgressAt > NO_PROGRESS_WINDOW`), so a
+   * turn that keeps producing content survives churn indefinitely while a
+   * genuinely stuck turn is sealed within the window (#1637). Optional for
+   * backward-compat — falls back to `firstSeenAt`.
+   */
+  lastProgressAt?: number;
   reason?: string;
   /**
    * High-water mark of the durable, monotonic recovery-progress counter (see
@@ -127,11 +135,16 @@ type ChatRecoveryIncident = {
 
 const CHAT_RECOVERY_INCIDENT_KEY_PREFIX = "cf:chat-recovery:incident:";
 // Durable, monotonic forward-progress counter for recovery budget resets.
-// Incremented once per non-empty partial materialized by
-// `_persistOrphanedStream`; never recomputed from the (compactable) transcript.
-// See `_chatRecoveryProgressMarker`.
+// Bumped at production time when new content is streamed (`_storeStreamChunk`),
+// so it reflects genuinely new content and is immune to reconnects/re-persists;
+// never recomputed from the (compactable) transcript. See
+// `_chatRecoveryProgressMarker`.
 const CHAT_RECOVERY_PROGRESS_KEY = "cf:chat-recovery:progress";
-const DEFAULT_CHAT_RECOVERY_MAX_ATTEMPTS = 6;
+// Secondary backstop only. The primary recovery bound is the no-progress
+// wall clock below; with alarm debounce this cap rarely binds (it catches a
+// pathological tight alarm-loop). Kept high so the no-progress window seals
+// first under normal deploy cadence (#1637).
+const DEFAULT_CHAT_RECOVERY_MAX_ATTEMPTS = 10;
 const DEFAULT_CHAT_RECOVERY_STABLE_TIMEOUT_MS = 10_000;
 // Delay before retrying a recovery that timed out waiting for stable state.
 // Gives an actively-churning isolate (e.g. a deploy in flight) time to settle.
@@ -141,10 +154,18 @@ const DEFAULT_CHAT_RECOVERY_TERMINAL_MESSAGE =
 // Incidents that have not seen a new attempt within this window are assumed
 // abandoned and swept so durable storage does not grow without bound.
 const CHAT_RECOVERY_INCIDENT_TTL_MS = 60 * 60 * 1000;
-// Hard wall-clock ceiling for a single recovery incident. The attempt budget
-// can be reset by forward progress (see `_beginChatRecoveryIncident`), so this
-// is the ultimate stop that prevents an environment churning indefinitely from
-// retrying forever.
+// PRIMARY recovery bound (#1637): seal an incident that has made no forward
+// progress for this long. Keyed to `lastProgressAt`, which resets on every
+// progress-bearing attempt — so a turn that keeps producing content survives
+// deploy churn indefinitely, while a genuinely stuck turn dies within 5 min.
+const CHAT_RECOVERY_NO_PROGRESS_WINDOW_MS = 5 * 60 * 1000;
+// Alarm debounce: recovery alarms bunched within this window collapse into a
+// single attempt. A deploy rollout drops/reconnects the socket several times
+// over ~11–22s; without this, one logical deploy would burn several attempts.
+const CHAT_RECOVERY_ALARM_DEBOUNCE_MS = 30 * 1000;
+// ABSOLUTE ceiling for a single recovery incident, keyed to `firstSeenAt` and
+// NEVER reset by progress — the final hard stop so even a degenerate
+// slowly-progressing loop cannot run forever.
 const CHAT_RECOVERY_MAX_WINDOW_MS = 15 * 60 * 1000;
 
 type StreamResultStatus = {
@@ -1283,9 +1304,39 @@ export class AIChatAgent<
     }
   }
 
-  /** @internal Delegate to _resumableStream */
-  protected _storeStreamChunk(streamId: string, body: string) {
+  /** @internal Delegate to _resumableStream. Also advances the recovery
+   *  progress counter at production time (see `_maybeBumpRecoveryProgress`). */
+  protected async _storeStreamChunk(streamId: string, body: string) {
     this._resumableStream.storeChunk(streamId, body);
+    let type: string | undefined;
+    try {
+      type = (JSON.parse(body) as { type?: string }).type;
+    } catch {
+      // non-JSON chunk body — nothing to credit
+    }
+    await this._maybeBumpRecoveryProgress(type);
+  }
+
+  /** Advance the recovery-progress counter when a chunk represents genuinely
+   *  new produced content — a started text/reasoning segment or a settled tool
+   *  input/output. Bumped at production time (the streaming path), so it
+   *  reflects real forward progress and is immune to client reconnects /
+   *  recovery re-persists (which replay or re-materialize stored chunks rather
+   *  than flow through here). This is what the recovery no-progress window keys
+   *  off (#1637), and stays compaction-proof (#1628). */
+  private async _maybeBumpRecoveryProgress(
+    type: string | undefined
+  ): Promise<void> {
+    if (
+      type === "text-start" ||
+      type === "reasoning-start" ||
+      type === "tool-input-available" ||
+      type === "tool-output-available" ||
+      type === "tool-output-error" ||
+      type === "tool-output-denied"
+    ) {
+      await this._bumpChatRecoveryProgress();
+    }
   }
 
   /** @internal Delegate to _resumableStream */
@@ -1386,11 +1437,9 @@ export class AIChatAgent<
           ? this.messages.map((m, i) => (i === existingIdx ? message : m))
           : [...this.messages, message];
       await this.persistMessages(updatedMessages);
-      // Real forward progress: a non-empty partial was materialized. Advance
-      // the durable, compaction-immune progress counter so a deploy-churned
-      // turn that keeps producing content resets its recovery budget instead
-      // of exhausting it (#1628).
-      await this._bumpChatRecoveryProgress();
+      // NOTE: progress is bumped at production/flush time in `_storeStreamChunk`
+      // (#1637), NOT here — persisting on recovery or a client reconnect must
+      // not be miscounted as new forward progress.
     }
   }
 
@@ -1464,7 +1513,7 @@ export class AIChatAgent<
    * @param event - The text event payload (text-start, text-delta with delta, or text-end)
    * @param continuation - Whether this is a continuation of a previous stream
    */
-  private _broadcastTextEvent(
+  private async _broadcastTextEvent(
     streamId: string,
     event:
       | { type: "text-start"; id: string }
@@ -1473,7 +1522,7 @@ export class AIChatAgent<
     continuation: boolean
   ) {
     const body = JSON.stringify(event);
-    this._storeStreamChunk(streamId, body);
+    await this._storeStreamChunk(streamId, body);
     this._broadcastChatMessage({
       body,
       done: false,
@@ -3023,9 +3072,11 @@ export class AIChatAgent<
    * assistant messages into a summary, lowering the count — so a turn that had
    * genuinely advanced could read as "no progress" between attempts and exhaust
    * its budget prematurely (#1628). Instead we read a durably-persisted counter
-   * that only ever increments — bumped once per non-empty partial materialized
-   * by `_persistOrphanedStream`, which is the exact "forward progress" event the
-   * old message-count tracked — so compaction can never lower it.
+   * that only ever increments — bumped at production time when new content is
+   * streamed (see `_storeStreamChunk` / `_maybeBumpRecoveryProgress`), which is
+   * genuine forward progress and is immune to client reconnects / recovery
+   * re-persists — so compaction can never lower it and a reconnect can't fake
+   * it (#1637).
    */
   private async _chatRecoveryProgressMarker(): Promise<number> {
     return (
@@ -3033,8 +3084,9 @@ export class AIChatAgent<
     );
   }
 
-  /** Advance the durable recovery-progress counter. Called when a partial
-   *  assistant message is materialized (real forward progress). */
+  /** Advance the durable recovery-progress counter. Called from
+   *  `_maybeBumpRecoveryProgress` when new content is streamed (real,
+   *  reconnect-immune forward progress). */
   private async _bumpChatRecoveryProgress(): Promise<void> {
     const current =
       (await this.ctx.storage.get<number>(CHAT_RECOVERY_PROGRESS_KEY)) ?? 0;
@@ -3064,6 +3116,8 @@ export class AIChatAgent<
     latestUserMessageId?: string | null;
     targetAssistantId?: string | null;
     recoveryKind: ChatRecoveryKind;
+    /** Test-only clock injection for deterministic debounce/window timing. */
+    nowMs?: number;
   }): Promise<{
     incident: ChatRecoveryIncident;
     config: ResolvedChatRecoveryConfig;
@@ -3072,28 +3126,51 @@ export class AIChatAgent<
     const config = this._resolveChatRecoveryConfig();
     const incidentId = this._chatRecoveryIncidentId(input);
     const key = this._chatRecoveryIncidentKey(incidentId);
-    const now = Date.now();
+    const now = input.nowMs ?? Date.now();
     await this._sweepStaleChatRecoveryIncidents(now);
     const existing = await this.ctx.storage.get<ChatRecoveryIncident>(key);
 
     // Forward-progress detection. A mid-turn deploy resets the Durable Object
     // ("code was updated"); the interrupted continuation is re-detected on the
-    // next wake. Without this, every such interruption consumes one attempt, so
-    // a deploy roughly every few minutes burns the whole budget and permanently
-    // abandons a turn that is actually advancing. We treat an interruption that
-    // followed real progress (more persisted assistant content than the last
-    // attempt saw) as environmental and reset the budget, while a turn that
-    // never advances still exhausts at `maxAttempts`.
+    // next wake. A turn that followed real progress (more durably-produced
+    // content than the last attempt saw) is environmental churn, not a poison
+    // turn.
     const prevProgress = existing?.progress ?? 0;
     const currentProgress = await this._chatRecoveryProgressMarker();
     const madeProgress = existing != null && currentProgress > prevProgress;
-    const windowExceeded =
+
+    // Wall-clock-keyed-to-progress budget (#1637). The raw attempt count is the
+    // wrong primary bound under deploy churn: one rollout drops/reconnects the
+    // socket several times (~11–22s), each firing an alarm, so a count inflates
+    // far faster than the real interruption rate and seals a healthy turn.
+    //  • PRIMARY — no-progress window: `lastProgressAt` resets on every
+    //    progress-bearing attempt, so a turn that keeps producing content
+    //    survives churn indefinitely; a stuck turn is sealed after 5 min.
+    //  • DEBOUNCE — alarms bunched within `ALARM_DEBOUNCE_MS` collapse into one
+    //    attempt, so a single rollout's reconnect storm isn't N attempts.
+    //  • SECONDARY — the attempt cap is a high backstop (resets on progress).
+    //  • ABSOLUTE — the 15-min incident-age ceiling never resets (final stop).
+    const lastProgressAt = madeProgress
+      ? now
+      : (existing?.lastProgressAt ?? existing?.firstSeenAt ?? now);
+    const noProgressExceeded =
+      existing != null &&
+      now - lastProgressAt > CHAT_RECOVERY_NO_PROGRESS_WINDOW_MS;
+    const incidentAgeExceeded =
       existing != null &&
       now - existing.firstSeenAt > CHAT_RECOVERY_MAX_WINDOW_MS;
+    const debounced =
+      existing != null &&
+      !madeProgress &&
+      now - existing.lastAttemptAt < CHAT_RECOVERY_ALARM_DEBOUNCE_MS;
 
-    const attempt =
-      madeProgress && !windowExceeded ? 1 : (existing?.attempt ?? 0) + 1;
-    const exhausted = windowExceeded || attempt > config.maxAttempts;
+    const attempt = madeProgress
+      ? 1
+      : debounced
+        ? (existing?.attempt ?? 1)
+        : (existing?.attempt ?? 0) + 1;
+    const exhausted =
+      noProgressExceeded || incidentAgeExceeded || attempt > config.maxAttempts;
     const incident: ChatRecoveryIncident = {
       incidentId,
       requestId: input.requestId,
@@ -3103,12 +3180,15 @@ export class AIChatAgent<
       status: exhausted ? "exhausted" : "attempting",
       firstSeenAt: existing?.firstSeenAt ?? now,
       lastAttemptAt: now,
+      lastProgressAt,
       progress: Math.max(prevProgress, currentProgress),
       ...(exhausted
         ? {
-            reason: windowExceeded
+            reason: incidentAgeExceeded
               ? "max_recovery_window_exceeded"
-              : "max_attempts_exceeded"
+              : noProgressExceeded
+                ? "no_progress_timeout"
+                : "max_attempts_exceeded"
           }
         : {})
     };
@@ -4720,7 +4800,7 @@ export class AIChatAgent<
 
             // Store chunk for replay and broadcast to clients
             const chunkBody = JSON.stringify(eventToSend);
-            this._storeStreamChunk(streamId, chunkBody);
+            await this._storeStreamChunk(streamId, chunkBody);
             this._broadcastChatMessage({
               body: chunkBody,
               done: false,
@@ -4785,7 +4865,7 @@ export class AIChatAgent<
       // Skip broadcasting text-start — the client already has this part
     } else {
       // if not AI SDK SSE format, we need to inject text-start and text-end events ourselves
-      this._broadcastTextEvent(
+      await this._broadcastTextEvent(
         streamId,
         { type: "text-start", id },
         continuation
@@ -4823,7 +4903,7 @@ export class AIChatAgent<
         if (abortSignal?.aborted) break;
         textPart.state = "done";
 
-        this._broadcastTextEvent(
+        await this._broadcastTextEvent(
           streamId,
           { type: "text-end", id },
           continuation
@@ -4848,7 +4928,7 @@ export class AIChatAgent<
       // Accumulate into the single text part to preserve exact formatting
       if (chunk.length > 0) {
         textPart.text += chunk;
-        this._broadcastTextEvent(
+        await this._broadcastTextEvent(
           streamId,
           { type: "text-delta", id, delta: chunk },
           continuation
@@ -4859,7 +4939,7 @@ export class AIChatAgent<
     // If we exited due to abort, send a done signal so clients know the stream ended
     if (!streamCompleted.value) {
       textPart.state = "done";
-      this._broadcastTextEvent(
+      await this._broadcastTextEvent(
         streamId,
         { type: "text-end", id },
         continuation
