@@ -142,6 +142,7 @@ import {
   AbortRegistry,
   applyToolUpdate,
   toolResultUpdate,
+  crossMessageToolResultUpdate,
   toolApprovalUpdate,
   parseProtocolMessage,
   applyChunkToParts,
@@ -1594,6 +1595,13 @@ export class Think<
    * Tool-call ids that still have no recorded result. After repair this should
    * be empty; a non-empty result means the backstop (`ignoreIncompleteToolCalls`)
    * will drop those calls — i.e. repair missed a shape and should be extended.
+   *
+   * `approval-responded` is deliberately excluded: an approved server tool has
+   * no result *yet*, but it is not incomplete or abandoned — it is waiting for
+   * its continuation to run `execute()`. `convertToModelMessages` keeps that
+   * call (and the SDK executes it), so flagging it here would log a misleading
+   * "repair gap" warning and emit a spurious `chat:transcript:repaired` event
+   * on every approval continuation.
    */
   private _incompleteToolCallIds(messages: UIMessage[]): string[] {
     const ids: string[] = [];
@@ -1607,6 +1615,7 @@ export class Think<
           (record.type.startsWith("tool-") || record.type === "dynamic-tool") &&
           toolCallId;
         if (!isToolPart) continue;
+        if (record.state === "approval-responded") continue;
         if (!this._toolPartHasSettledResult(record)) ids.push(toolCallId);
       }
     }
@@ -1672,6 +1681,16 @@ export class Think<
         }
 
         if (!this._toolPartHasSettledResult(record)) {
+          const state = typeof record.state === "string" ? record.state : "";
+          // An approved server tool waits at `approval-responded` until its
+          // scheduled continuation runs `execute()`. It is not abandoned, so
+          // preserve it verbatim — flipping it to an error (or removing it)
+          // would strand the approval and prevent the real result from ever
+          // being produced by the continuation.
+          if (state === "approval-responded") {
+            parts.push(part);
+            continue;
+          }
           // Preserve the interrupted/abandoned tool call instead of deleting
           // it. Deleting makes the call "disappear" from the (broadcast)
           // transcript and lets the model silently re-run it. `input` is
@@ -6744,6 +6763,27 @@ export class Think<
           const streamChunk = chunk as unknown as StreamChunkData;
           const { action } = accumulator.applyChunk(streamChunk);
 
+          // Approved server tools execute during a continuation stream, but
+          // their original tool part lives in an earlier assistant message.
+          // The accumulator can only own this turn's new content, so it
+          // surfaces a terminal result for a prior message as a
+          // `cross-message-tool-update`. Persist + broadcast it directly so
+          // the approved result reaches clients and durable storage. The
+          // update builder is first-write-wins (replay-safe) and preserves a
+          // streamed `preliminary` flag; `_applyToolUpdateToMessages` skips
+          // the write/broadcast when the matched part is already settled.
+          if (action?.type === "cross-message-tool-update") {
+            await this._applyToolUpdateToMessages(
+              crossMessageToolResultUpdate(
+                action.toolCallId,
+                action.updateType,
+                action.output,
+                action.errorText,
+                action.preliminary
+              )
+            );
+          }
+
           if (action?.type === "error") {
             streamError = action.error;
             if (options?.captureProgrammaticStreamError) {
@@ -6755,7 +6795,8 @@ export class Think<
               id: requestId,
               body: action.error,
               done: false,
-              error: true
+              error: true,
+              ...(continuation && { continuation: true })
             });
             break;
           }
@@ -6771,7 +6812,8 @@ export class Think<
             type: MSG_CHAT_RESPONSE,
             id: requestId,
             body: chunkBody,
-            done: false
+            done: false,
+            ...(continuation && { continuation: true })
           });
         }
       } finally {
@@ -6788,7 +6830,8 @@ export class Think<
         type: MSG_CHAT_RESPONSE,
         id: requestId,
         body: "",
-        done: true
+        done: true,
+        ...(continuation && { continuation: true })
       });
       doneSent = true;
     } catch (error) {
@@ -6825,7 +6868,8 @@ export class Think<
               type: MSG_CHAT_RESPONSE,
               id: requestId,
               body: "",
-              done: true
+              done: true,
+              ...(continuation && { continuation: true })
             });
             doneSent = true;
           }
@@ -6862,7 +6906,8 @@ export class Think<
           id: requestId,
           body: streamError,
           done: true,
-          error: true
+          error: true,
+          ...(continuation && { continuation: true })
         });
         doneSent = true;
       }
@@ -6874,7 +6919,8 @@ export class Think<
           type: MSG_CHAT_RESPONSE,
           id: requestId,
           body: "",
-          done: true
+          done: true,
+          ...(continuation && { continuation: true })
         });
       }
     }
@@ -7024,16 +7070,25 @@ export class Think<
     const history = await this._readMessagesFromStorage();
     for (let i = 0; i < history.length; i++) {
       const msg = history[i];
-      const result = applyToolUpdate(
-        msg.parts as Array<Record<string, unknown>>,
-        update
-      );
+      const msgParts = msg.parts as Array<Record<string, unknown>>;
+      const result = applyToolUpdate(msgParts, update);
       if (result) {
+        // First-write-wins / idempotent re-apply: when `apply` leaves the
+        // matched part untouched (same reference) — e.g. a provider replay of
+        // an already-settled cross-message tool result (#1404) — there is
+        // nothing to persist. Skip the durable write and the redundant
+        // `MESSAGE_UPDATED` broadcast so clients don't churn on a no-op.
+        if (result.parts[result.index] === msgParts[result.index]) {
+          return;
+        }
         const updatedMsg = {
           ...msg,
           parts: result.parts as UIMessage["parts"]
         };
         const safe = await this._updateMessageInHistory(updatedMsg);
+        // Session change callbacks may run after an immediately scheduled
+        // continuation begins. Keep its input cache coherent synchronously.
+        this._patchCachedMessage(safe);
         // Patch the live cache in place instead of doing a full
         // `_syncMessages()` round-trip.
         // A full re-read during a streaming turn drops in-flight messages
