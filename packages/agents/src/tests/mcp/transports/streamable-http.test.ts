@@ -834,4 +834,208 @@ describe("Streamable HTTP Transport", () => {
       expect(echoedData.sessionId).toBe(sessionId);
     });
   });
+
+  describe("Standalone fan-out and resume supersession", () => {
+    const makeConnection = (
+      id: string,
+      state: {
+        streamId?: string;
+        _standaloneSse?: boolean;
+        requestIds?: string[];
+      }
+    ) => ({
+      id,
+      state,
+      send: vi.fn(),
+      close: vi.fn(),
+      setState: vi.fn()
+    });
+
+    const makeTransport = (
+      connections: ReturnType<typeof makeConnection>[],
+      agentOverrides: Record<string, unknown> = {}
+    ) => {
+      const agent = {
+        deleteStreamRequestIds: vi.fn(async () => undefined),
+        getStreamRequestIds: vi.fn(async () => undefined),
+        getConnections: () => connections,
+        getSessionId: () => "session-id",
+        ...agentOverrides
+      };
+      const transport = agentContext.run(
+        {
+          agent,
+          connection: undefined,
+          email: undefined,
+          request: undefined
+        },
+        () => new StreamableHTTPServerTransport({})
+      );
+      return { agent, transport };
+    };
+
+    it("sends a server notification on exactly one standalone stream", async () => {
+      // MCP: the server MUST send each message on only one stream and
+      // MUST NOT broadcast across multiple. `handleGetRequest`
+      // supersedes prior standalone connections so only one is ever
+      // live; this asserts the send path honours that and never
+      // touches a POST bridge.
+      const standalone = makeConnection("sse-1", { _standaloneSse: true });
+      const postBridge = makeConnection("post", {
+        streamId: "post",
+        requestIds: ["r1"]
+      });
+      const { agent, transport } = makeTransport([standalone, postBridge]);
+
+      const notification: JSONRPCNotification = {
+        jsonrpc: "2.0",
+        method: "notifications/message",
+        params: { level: "info", data: "hello" }
+      };
+
+      await agentContext.run(
+        {
+          agent,
+          connection: undefined,
+          email: undefined,
+          request: undefined
+        },
+        () => transport.send(notification)
+      );
+
+      expect(standalone.send).toHaveBeenCalledOnce();
+      // The POST bridge is not a standalone stream — it must not receive it.
+      expect(postBridge.send).not.toHaveBeenCalled();
+    });
+
+    it("stores but does not write when no standalone stream is live", async () => {
+      // No `_standaloneSse` connection attached: the event is stored
+      // for replay (verified elsewhere) and no live write happens.
+      const postBridge = makeConnection("post", {
+        streamId: "post",
+        requestIds: ["r1"]
+      });
+      let stored = 0;
+      const { agent, transport } = makeTransport([postBridge]);
+      (transport as unknown as { _eventStore: unknown })._eventStore = {
+        storeEvent: async () => {
+          stored++;
+          return "_GET_stream:0";
+        }
+      };
+
+      const notification: JSONRPCNotification = {
+        jsonrpc: "2.0",
+        method: "notifications/message",
+        params: { level: "info", data: "hello" }
+      };
+
+      await agentContext.run(
+        {
+          agent,
+          connection: undefined,
+          email: undefined,
+          request: undefined
+        },
+        () => transport.send(notification)
+      );
+
+      expect(stored).toBe(1);
+      expect(postBridge.send).not.toHaveBeenCalled();
+    });
+
+    it("closes a stale POST connection when a GET resumes its stream", async () => {
+      // Behavioural change: resuming an active POST stream supersedes
+      // any prior connection bound to the same streamId by closing it,
+      // so `send()` can't route tool progress to the dead bridge.
+      const stalePost = makeConnection("stream-A", {
+        streamId: "stream-A",
+        requestIds: ["r1"]
+      });
+      const resuming = makeConnection("resume-conn", {});
+      const { agent, transport } = makeTransport([stalePost, resuming], {
+        getStreamRequestIds: vi.fn(async () => ["r1"])
+      });
+      // Resolve the resumed event id back to stream-A.
+      (transport as unknown as { _eventStore: unknown })._eventStore = {
+        getStreamIdForEventId: async () => "stream-A",
+        storeEvent: async () => "stream-A:0",
+        replayEventsAfter: async () => "stream-A"
+      };
+
+      const req = new Request("http://example.com/mcp", {
+        method: "GET",
+        headers: {
+          Accept: "text/event-stream",
+          "mcp-session-id": "session-id",
+          "last-event-id": "stream-A:0000000000000001"
+        }
+      });
+
+      await agentContext.run(
+        {
+          agent,
+          connection: resuming as unknown as Connection,
+          email: undefined,
+          request: req
+        },
+        () => transport.handleGetRequest(req)
+      );
+
+      // The stale POST bridge is superseded.
+      expect(stalePost.close).toHaveBeenCalledOnce();
+      expect(stalePost.close).toHaveBeenCalledWith(
+        1000,
+        "Superseded by resumed stream"
+      );
+      // The resuming connection is not closed.
+      expect(resuming.close).not.toHaveBeenCalled();
+      // And it claims the persisted requestIds.
+      expect(resuming.setState).toHaveBeenCalledWith(
+        expect.objectContaining({ streamId: "stream-A", requestIds: ["r1"] })
+      );
+    });
+
+    it("supersedes a prior standalone GET when a fresh GET opens", async () => {
+      // MCP allows only one standalone GET per session. A fresh GET
+      // (no Last-Event-ID) closes the prior standalone connection
+      // rather than running two in parallel.
+      const priorStandalone = makeConnection("old-get", {
+        streamId: "_GET_stream",
+        _standaloneSse: true
+      });
+      const freshGet = makeConnection("new-get", {});
+      const { agent, transport } = makeTransport([priorStandalone, freshGet]);
+
+      const req = new Request("http://example.com/mcp", {
+        method: "GET",
+        headers: {
+          Accept: "text/event-stream",
+          "mcp-session-id": "session-id"
+        }
+      });
+
+      await agentContext.run(
+        {
+          agent,
+          connection: freshGet as unknown as Connection,
+          email: undefined,
+          request: req
+        },
+        () => transport.handleGetRequest(req)
+      );
+
+      expect(priorStandalone.close).toHaveBeenCalledWith(
+        1000,
+        "Superseded by resumed stream"
+      );
+      expect(freshGet.close).not.toHaveBeenCalled();
+      expect(freshGet.setState).toHaveBeenCalledWith(
+        expect.objectContaining({
+          streamId: "_GET_stream",
+          _standaloneSse: true
+        })
+      );
+    });
+  });
 });
