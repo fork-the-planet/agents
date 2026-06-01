@@ -727,6 +727,34 @@ export interface StreamCallback {
   onEvent(json: string): void | Promise<void>;
   onDone(): void | Promise<void>;
   onError(error: string): void | Promise<void>;
+  /**
+   * The current attempt was interrupted (a stream-stall watchdog abort routed
+   * into bounded recovery, #1626) and its final outcome will NOT arrive through
+   * this callback. One of two things is true:
+   *  - a scheduled continuation — running in a LATER isolate invocation, without
+   *    this callback — will produce the answer (delivered to other channels,
+   *    e.g. WebSocket connections), OR
+   *  - the recovery budget was exhausted, so the turn was already terminalized
+   *    out-of-band (the configured `terminalMessage` + `onExhausted`) and is
+   *    terminally over — there is NO continuation to come.
+   *
+   * This is NOT `onDone` (this attempt did not complete) and NOT `onError` (the
+   * raw stall is not surfaced as a terminal error here); without it the contract
+   * `onStart → onEvent* → (onDone | onError)` is silently abandoned and a
+   * consumer that treats the clean resolve as success finalizes a truncated
+   * partial.
+   *
+   * Consumers should AVOID finalizing the partial on this signal — surface a
+   * "recovering…" / "interrupted, please retry" state, or re-attach via a
+   * durable channel — but must ALSO NOT block indefinitely waiting for a
+   * continuation: per the exhausted case above, one may never come. Optional →
+   * defaults to a no-op, so this is fully backward-compatible.
+   *
+   * Note: a deploy/eviction interruption kills the isolate (and this callback)
+   * before this can fire — the caller observes a transport break instead. This
+   * fires only for an in-isolate interruption (the stall→recovery path).
+   */
+  onInterrupted?(): void | Promise<void>;
 }
 
 /**
@@ -6488,8 +6516,11 @@ export class Think<
             });
             doneSent = true;
           }
-          // No `callback.onError`/response hook: the scheduled continuation owns
-          // the real terminal outcome (mirrors a deploy-interrupted attempt).
+          // The scheduled continuation (a later isolate invocation, without this
+          // callback) owns the real terminal outcome. Signal the interruption so
+          // the caller doesn't read this clean resolve as success and finalize a
+          // truncated partial (#1644); NOT onDone/onError — see `onInterrupted`.
+          await callback.onInterrupted?.();
           return;
         }
         if (outcome === "exhausted") {
@@ -6503,6 +6534,11 @@ export class Think<
             streamFinalized = true;
           }
           doneSent = true;
+          // Exhaustion is terminal for the turn, but it was delivered out-of-band
+          // by `_exhaustChatRecovery` (banner/`onExhausted`), NOT through this
+          // callback's `onError`. Signal the interruption so a `chat()` consumer
+          // doesn't mis-read the clean resolve as a successful completion (#1644).
+          await callback.onInterrupted?.();
           return;
         }
         // outcome === "disabled" (chat recovery off): fall through to the
