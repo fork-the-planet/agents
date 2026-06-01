@@ -3545,13 +3545,119 @@ export class Think<
     `;
   }
 
+  /**
+   * Classify any in-flight chat-recovery on this child facet (#1630). A child
+   * facet is dedicated to a single agent-tool run, so any recovery incident is
+   * that run's. `detected`/`scheduled`/`attempting` mean recovery is still
+   * resolving the interrupted turn; `exhausted`/`failed` mean it gave up; a
+   * completed recovery deletes its incident.
+   */
+  private async _classifyAgentToolChildRecovery(): Promise<
+    "in-progress" | "failed" | "none"
+  > {
+    const entries = await this.ctx.storage.list<ChatRecoveryIncident>({
+      prefix: CHAT_RECOVERY_INCIDENT_KEY_PREFIX
+    });
+    let failed = false;
+    for (const incident of entries.values()) {
+      if (
+        incident.status === "detected" ||
+        incident.status === "scheduled" ||
+        incident.status === "attempting"
+      ) {
+        return "in-progress";
+      }
+      if (incident.status === "exhausted" || incident.status === "failed") {
+        failed = true;
+      }
+    }
+    return failed ? "failed" : "none";
+  }
+
   async inspectAgentToolRun(
     runId: string
   ): Promise<AgentToolRunInspection | null> {
-    const row = this._readAgentToolChildRun(runId);
-    return row
-      ? this._inspectionFromChildRow(row, this.getAgentToolOutput(runId))
-      : null;
+    let row = this._readAgentToolChildRun(runId);
+    if (!row) return null;
+    // A `running`/`starting` row with no live abort controller means the
+    // original in-isolate run is gone (e.g. the parent was evicted while this
+    // child run was in flight, #1630) — lazily reconcile it from the child's
+    // own durable recovery before reporting.
+    if (this._isStaleAgentToolChildRun(row)) {
+      await this._reconcileStaleAgentToolChildRun(runId);
+      row = this._readAgentToolChildRun(runId) ?? row;
+    }
+    return this._inspectionFromChildRow(row, this.getAgentToolOutput(runId));
+  }
+
+  private _isStaleAgentToolChildRun(row: AgentToolChildRunRow): boolean {
+    return (
+      (row.status === "running" || row.status === "starting") &&
+      row.completed_at === null &&
+      !this._agentToolAbortControllers.has(row.run_id)
+    );
+  }
+
+  /**
+   * Reconcile a stale (post-eviction) child run row from the child's own
+   * durable recovery (#1630). The child facet self-heals its interrupted turn
+   * via `chatRecovery`, but that path never writes the run row, so without this
+   * the row strands `running` and the parent can only collect `interrupted`.
+   *
+   * Persisting the terminal here (rather than only computing it) is intentional:
+   * it's a lazy materialization of the run's true terminal that also lets a
+   * tailing parent's stream close promptly and makes subsequent inspects cheap.
+   * While recovery is still resolving (active stream or in-progress incident)
+   * the row is left `running` so the parent's bounded re-attach keeps waiting.
+   */
+  private async _reconcileStaleAgentToolChildRun(runId: string): Promise<void> {
+    const recovery = await this._classifyAgentToolChildRecovery();
+    if (recovery === "in-progress" || this._resumableStream.hasActiveStream()) {
+      return;
+    }
+    // A settled recovery that produced an assistant turn is `completed`, even if
+    // that turn ended on a tool result with no final text — keying off text
+    // alone would mis-seal a legitimately-finished (but text-less) run as
+    // `error`. `getAgentToolSummary` already falls back to "" when there is no
+    // final text.
+    const recoveredTurn =
+      recovery !== "failed" && this._hasRecoveredAgentToolAssistantTurn(runId);
+    if (recoveredTurn) {
+      const output = this.getAgentToolOutput(runId);
+      const summary = this.getAgentToolSummary(runId, output);
+      this.sql`
+        UPDATE cf_agent_tool_child_runs
+        SET status = 'completed',
+            summary = ${summary},
+            output_json = ${Think._stringifyAgentToolOutput(output)},
+            error_message = null,
+            completed_at = ${Date.now()}
+        WHERE run_id = ${runId} AND completed_at IS NULL
+      `;
+    } else {
+      const error =
+        "Agent tool run was interrupted before the child could finish.";
+      this.sql`
+        UPDATE cf_agent_tool_child_runs
+        SET status = 'error',
+            error_message = ${error},
+            completed_at = ${Date.now()}
+        WHERE run_id = ${runId} AND completed_at IS NULL
+      `;
+    }
+    this._finalizeAgentToolChildRunTailers(runId);
+  }
+
+  /** Release a re-attached run's live tail + per-run streaming bookkeeping. */
+  private _finalizeAgentToolChildRunTailers(runId: string): void {
+    for (const close of this._agentToolClosers.get(runId) ?? []) {
+      close();
+    }
+    this._agentToolClosers.delete(runId);
+    this._agentToolForwarders.delete(runId);
+    this._agentToolLiveSequences.delete(runId);
+    this._agentToolLastErrors.delete(runId);
+    this._agentToolPreTurnAssistantIds.delete(runId);
   }
 
   async getAgentToolChunks(
@@ -3569,13 +3675,42 @@ export class Think<
 
   async tailAgentToolRun(
     runId: string,
-    options?: { afterSequence?: number }
+    options?: { afterSequence?: number; signal?: AbortSignal }
   ): Promise<ReadableStream<AgentToolStoredChunk>> {
     const self = this;
+    const signal = options?.signal;
+    let closed = false;
+    let forward: ((chunk: AgentToolStoredChunk) => void) | undefined;
+    const detach = () => {
+      if (forward) {
+        self._agentToolForwarders.get(runId)?.delete(forward);
+        forward = undefined;
+      }
+    };
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
+        const close = () => {
+          if (closed) return;
+          closed = true;
+          detach();
+          try {
+            controller.close();
+          } catch {
+            // Already closed.
+          }
+        };
+        // Honor an external abort (e.g. a bounded re-attach budget) so a parent
+        // tailing a still-running child can stop waiting without cancelling the
+        // child itself — closing the stream unblocks the parent's forwarder.
+        if (signal?.aborted) {
+          close();
+          return;
+        }
+        signal?.addEventListener("abort", close, { once: true });
+
         const replayed = await self.getAgentToolChunks(runId, options);
         for (const chunk of replayed) {
+          if (closed) return;
           controller.enqueue(
             agentToolChunkEncoder.encode(`${JSON.stringify(chunk)}\n`)
           );
@@ -3586,21 +3721,24 @@ export class Think<
         }
         const row = self._readAgentToolChildRun(runId);
         if (!row || row.completed_at !== null) {
-          controller.close();
+          close();
           return;
         }
-        const forward = (chunk: AgentToolStoredChunk) => {
-          if (chunk.sequence > (options?.afterSequence ?? -1)) {
+        forward = (chunk: AgentToolStoredChunk) => {
+          if (closed || chunk.sequence <= (options?.afterSequence ?? -1)) {
+            return;
+          }
+          try {
             controller.enqueue(
               agentToolChunkEncoder.encode(`${JSON.stringify(chunk)}\n`)
             );
-          }
-        };
-        const close = () => {
-          try {
-            controller.close();
           } catch {
-            // Already closed.
+            // The consumer detached (e.g. a parent's re-attach budget expired
+            // and cancelled the reader) between the RPC cancel arriving and our
+            // `cancel`/`close` running. Drop the chunk instead of surfacing a
+            // "Stream was cancelled" rejection; the child run is unaffected.
+            closed = true;
+            detach();
           }
         };
         const forwarders = self._agentToolForwarders.get(runId) ?? new Set();
@@ -3610,8 +3748,13 @@ export class Think<
         closers.add(close);
         self._agentToolClosers.set(runId, closers);
       },
-      cancel(reason) {
-        void self.cancelAgentToolRun(runId, reason);
+      cancel() {
+        // A consumer detaching from the tail (e.g. a parent's bounded re-attach
+        // budget expiring, via reader.cancel()) is read-only — it must NOT
+        // cancel the child run. Explicit cancellation flows through
+        // cancelAgentToolRun. Mirrors @cloudflare/ai-chat's read-only tail.
+        closed = true;
+        detach();
       }
     });
     return stream as unknown as ReadableStream<AgentToolStoredChunk>;
@@ -3635,9 +3778,29 @@ export class Think<
     }
   }
 
+  /**
+   * Whether the run produced an assistant turn (text or tool-only). Used by the
+   * post-eviction reconcile to mark a settled run `completed` even when it ended
+   * without final text. A dedicated child facet starts with no assistant
+   * messages, so a missing in-memory pre-turn snapshot is treated as empty.
+   */
+  private _hasRecoveredAgentToolAssistantTurn(runId: string): boolean {
+    const before =
+      this._agentToolPreTurnAssistantIds.get(runId) ?? new Set<string>();
+    return this.messages.some(
+      (msg) => msg.role === "assistant" && !before.has(msg.id)
+    );
+  }
+
   private _getAgentToolFinalText(runId: string): string | null {
-    const before = this._agentToolPreTurnAssistantIds.get(runId);
-    if (!before) return null;
+    // A child facet is dedicated to a single agent-tool run, so any assistant
+    // message it holds is that run's output. When the pre-turn snapshot is
+    // missing — e.g. reconciling after a real eviction, where the in-memory
+    // snapshot died with the original isolate (#1630) — treat it as empty so
+    // the recovered transcript's assistant text is still surfaced as the
+    // summary instead of being lost.
+    const before =
+      this._agentToolPreTurnAssistantIds.get(runId) ?? new Set<string>();
     for (const msg of this.messages) {
       if (msg.role !== "assistant" || before.has(msg.id)) continue;
       const text = msg.parts
