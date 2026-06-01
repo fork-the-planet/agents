@@ -7998,6 +7998,129 @@ export class Think<
     return true;
   }
 
+  /**
+   * Resolve the stream id for a recovery turn so the give-up terminalization
+   * can surface whatever partial the turn produced. Prefers the durable stream
+   * row keyed by the recovery-root request id; falls back to the live active
+   * stream. Returns `""` when neither is available (the terminal banner still
+   * fires — `_exhaustChatRecovery` does not require a stream).
+   */
+  private _resolveRecoveryStreamId(requestId: string): string {
+    if (requestId) {
+      const fromMetadata = this._resumableStream
+        .getAllStreamMetadata()
+        .find((metadata) => metadata.request_id === requestId)?.id;
+      if (fromMetadata) return fromMetadata;
+    }
+    return this._resumableStream.hasActiveStream()
+      ? (this._resumableStream.activeStreamId ?? "")
+      : "";
+  }
+
+  /**
+   * Terminalize a recovery turn that has run out of stable-state-timeout retry
+   * budget — or whose incident record has vanished — by routing through the
+   * SAME `_exhaustChatRecovery` path as deploy-recovery and stall exhaustion
+   * (#1626/#1631). It fires `onExhausted`, emits `chat:recovery:exhausted`,
+   * marks the durable submission interrupted, records the terminal chat status,
+   * and delivers the configured `terminalMessage`.
+   *
+   * This replaces the older give-up that only set the incident to `failed` and
+   * completed the recovered submission as `error`, which bypassed
+   * `_exhaustChatRecovery` entirely — so an app relying on `onExhausted` for the
+   * terminal banner regressed to an eternal spinner when recovery gave up under
+   * extreme churn (the stable-state wait timing out every attempt until the
+   * budget drained). Shared by `_chatRecoveryRetry` and `_chatRecoveryContinue`.
+   *
+   * Exactly-once terminalization is defended by two independent guards:
+   *  1. The `stored?.status === "exhausted"` re-entry guard below — once an
+   *     incident is sealed, a duplicate stale alarm (or retried callback)
+   *     returns before re-firing. The sealed incident is re-persisted even when
+   *     the record was found missing, so a swept record is re-armed for the
+   *     guard on the next alarm.
+   *  2. The durable-submission paths additionally short-circuit earlier at the
+   *     `submission_not_running` check (the submission is already `error` after
+   *     the first give-up). This is the ONLY guard `@cloudflare/ai-chat` lacks
+   *     (no submission layer), so guard #1 carries it there.
+   *
+   * Two residual at-least-once edges, both deliberately accepted as "deliver a
+   * second banner" ≫ "silently drop the turn":
+   *  • No `incidentId` at all in the payload (only reachable via a direct/test
+   *    invocation — every production scheduler carries one): the synthesized
+   *    incident can't be persisted (no key), so guard #1 can't arm.
+   *  • The record is swept AGAIN between two alarms (guard #1 re-persists on the
+   *    first, so this needs a second independent sweep) — vanishingly unlikely.
+   */
+  private async _exhaustRecoveryAfterStableTimeout(
+    callback: "_chatRecoveryContinue" | "_chatRecoveryRetry",
+    data: ChatRecoveryContinueData | ChatRecoveryRetryData | undefined
+  ): Promise<void> {
+    const config = this._resolveChatRecoveryConfig();
+    const incidentKey = data?.incidentId
+      ? this._chatRecoveryIncidentKey(data.incidentId)
+      : null;
+    const stored = incidentKey
+      ? await this.ctx.storage.get<ChatRecoveryIncident>(incidentKey)
+      : null;
+
+    // Re-entry guard #1 (see method doc): a sealed incident means
+    // terminalization already happened, so a duplicate stale alarm must not
+    // re-fire `onExhausted` / re-broadcast the banner.
+    if (stored?.status === "exhausted") return;
+
+    const rootRequestId =
+      data?.originalRequestId ??
+      data?.recoveredRequestId ??
+      this._activeChatRecoveryRootRequestId ??
+      stored?.recoveryRootRequestId ??
+      stored?.requestId ??
+      "";
+
+    // `stable_timeout` distinguishes a give-up driven by repeated stable-state
+    // timeouts from the generic max-attempts / no-progress exhaustion reasons.
+    const incident: ChatRecoveryIncident = stored
+      ? { ...stored, status: "exhausted", reason: "stable_timeout" }
+      : {
+          // Silent-drop guard: the incident record is gone (no `incidentId`, or
+          // it was swept/deleted before this stale alarm fired). Synthesize a
+          // minimal incident so the turn STILL terminalizes through
+          // `onExhausted` instead of being dropped with no terminal UX — the
+          // exact "eternal spinner" failure mode this fix closes.
+          incidentId: data?.incidentId ?? crypto.randomUUID(),
+          requestId: rootRequestId,
+          recoveryRootRequestId: rootRequestId,
+          recoveryKind:
+            callback === "_chatRecoveryRetry" ? "retry" : "continue",
+          attempt: config.maxAttempts,
+          maxAttempts: config.maxAttempts,
+          status: "exhausted",
+          firstSeenAt: Date.now(),
+          lastAttemptAt: Date.now(),
+          reason: "stable_timeout"
+        };
+
+    // Persist the sealed incident (retained for inspection / TTL sweep) so the
+    // re-entry guard above sees `exhausted` if a duplicate stale alarm fires.
+    if (incidentKey) {
+      await this.ctx.storage.put(incidentKey, incident);
+    }
+
+    const streamId = this._resolveRecoveryStreamId(
+      incident.recoveryRootRequestId ?? incident.requestId
+    );
+    const partial = streamId
+      ? this._getPartialStreamText(streamId)
+      : { text: "", parts: [] as MessagePart[] };
+
+    await this._exhaustChatRecovery(
+      incident,
+      config,
+      partial,
+      streamId,
+      incident.firstSeenAt
+    );
+  }
+
   async _chatRecoveryRetry(data?: ChatRecoveryRetryData): Promise<void> {
     const recoveredSubmission = data?.recoveredRequestId
       ? this._readRunningSubmissionByRequestId(data.recoveredRequestId)
@@ -8039,19 +8162,15 @@ export class Think<
         ) {
           return;
         }
-        await this._updateChatRecoveryIncident(
-          data?.incidentId,
-          "failed",
-          "stable_timeout"
+        // Budget spent: terminalize through the SAME exhaustion path as deploy
+        // recovery (fires `onExhausted`, delivers the `terminalMessage` banner,
+        // marks the submission interrupted) instead of silently dropping the
+        // turn — otherwise an app relying on `onExhausted` sees an eternal
+        // spinner.
+        await this._exhaustRecoveryAfterStableTimeout(
+          "_chatRecoveryRetry",
+          data
         );
-        if (data?.recoveredRequestId) {
-          await this._completeRecoveredSubmission(
-            data.recoveredRequestId,
-            "error",
-            null,
-            "Recovered chat retry timed out waiting for stable state."
-          );
-        }
         return;
       }
 
@@ -8284,19 +8403,15 @@ export class Think<
         ) {
           return;
         }
-        await this._updateChatRecoveryIncident(
-          data?.incidentId,
-          "failed",
-          "stable_timeout"
+        // Budget spent: terminalize through the SAME exhaustion path as deploy
+        // recovery (fires `onExhausted`, delivers the `terminalMessage` banner,
+        // marks the submission interrupted) instead of silently dropping the
+        // turn — otherwise an app relying on `onExhausted` sees an eternal
+        // spinner.
+        await this._exhaustRecoveryAfterStableTimeout(
+          "_chatRecoveryContinue",
+          data
         );
-        if (data?.recoveredRequestId) {
-          await this._completeRecoveredSubmission(
-            data.recoveredRequestId,
-            "error",
-            null,
-            "Recovered chat continuation timed out waiting for stable state."
-          );
-        }
         return;
       }
 
