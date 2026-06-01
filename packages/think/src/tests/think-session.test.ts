@@ -517,6 +517,34 @@ describe("Think — error handling", () => {
     expect(result.error).toContain("Mock error under guard");
   });
 
+  it("routes a stream-stall watchdog abort into bounded recovery instead of failing terminally (#1626)", async () => {
+    const agent = await freshAgent(`stall-recover-${crypto.randomUUID()}`);
+    // The first inference hangs after 1 chunk → the watchdog aborts it. Instead
+    // of a terminal error, the turn is routed into bounded recovery; the
+    // scheduled continuation streams normally to completion.
+    // Stall after 3 UI chunks (past the first text-delta) so the partial has
+    // settled content to re-anchor the continuation.
+    const result = await agent.testChatWithStallThenRecover(3, 50);
+
+    // The stall did NOT terminalize — no terminal error surfaced...
+    expect(result.firstError).toBeUndefined();
+    // ...a continuation was scheduled...
+    expect(result.scheduledContinues).toBeGreaterThanOrEqual(1);
+    // ...and it streamed the turn to completion (recovered, not failed).
+    expect(result.finalAssistantText.length).toBeGreaterThan(0);
+  });
+
+  it("honors a per-turn TurnConfig.chatStreamStallTimeoutMs override even when the instance watchdog is off (#1626)", async () => {
+    const agent = await freshAgent(`stall-perturn-${crypto.randomUUID()}`);
+    // Instance watchdog is OFF; only the per-turn override (from beforeTurn)
+    // arms it. The stall must still fire + route into bounded recovery.
+    const result = await agent.testChatWithPerTurnStallOverride(50);
+
+    expect(result.firstError).toBeUndefined();
+    expect(result.scheduledContinues).toBeGreaterThanOrEqual(1);
+    expect(result.finalAssistantText.length).toBeGreaterThan(0);
+  });
+
   it("should recover and continue chatting after error", async () => {
     const agent = await freshAgent("err-recover");
 
@@ -3592,6 +3620,24 @@ describe("Think — onChatRecovery", () => {
     expect(ctx.streamId).toBe("stream-exctx");
     expect(typeof ctx.createdAt).toBe("number");
     expect(ctx.createdAt).toBeGreaterThan(0);
+  });
+
+  it("routes a stall through the SAME exhaustion path as deploy recovery once the budget is spent — fires onExhausted + delivers terminalMessage, not the raw stall error (#1626)", async () => {
+    const agent = await freshRecoveryAgent("stall-route-exhaust");
+    const terminalMessage = "The assistant was interrupted. Please try again.";
+    const result = await agent.testStallRouteExhaustion(1, terminalMessage);
+
+    // The route reports exhaustion (not "scheduled"/"disabled")...
+    expect(result.outcome).toBe("exhausted");
+    // ...routed through `_exhaustChatRecovery` (deploy-recovery's path), so the
+    // configured `onExhausted` hook fired exactly once with the right reason...
+    expect(result.exhaustedContexts).toBe(1);
+    expect(result.exhaustedReason).toBe("max_attempts_exceeded");
+    // ...the incident is durably sealed `exhausted`...
+    expect(result.incidentStatus).toBe("exhausted");
+    // ...and the user sees the CONFIGURED terminalMessage, not the raw
+    // "Chat stream stalled..." error.
+    expect(result.terminalBroadcast).toBe(terminalMessage);
   });
 });
 
