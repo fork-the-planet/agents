@@ -1912,6 +1912,23 @@ export class Think<
   private _insideResponseHook = false;
   private _insideInferenceLoop = false;
   private _pendingInteractionPromise: Promise<boolean> | null = null;
+  // Serialization tail for client-tool result/approval applies (#1649). Each
+  // apply is a read-modify-write of the full message; running siblings from a
+  // parallel tool batch concurrently lets last-write-wins clobber the others
+  // back to `input-available`. Chaining every apply off this tail makes them
+  // commit atomically in arrival order.
+  private _interactionApplyTail: Promise<void> = Promise.resolve();
+  // The in-flight assistant message for the active streaming turn. Until
+  // `_persistAssistantMessage` writes it at a turn boundary, the message lives
+  // ONLY in this accumulator — not in storage and not in `this.messages`. A
+  // client tool result can arrive over the WebSocket before that write (the
+  // tool-call chunk was already broadcast), so a storage-only lookup in
+  // `_applyToolUpdateToMessages` would miss the message and the part would
+  // later be repaired as "interrupted" (#1649). Exposing the accumulator here
+  // lets the apply write the result in place so it rides into the eventual
+  // persist. Null when no stream is active. Mirrors `@cloudflare/ai-chat`'s
+  // `_streamingMessage` handling.
+  private _streamingAssistant: StreamAccumulator | null = null;
   private _submitConcurrency = new SubmitConcurrencyController({
     defaultDebounceMs: Think.MESSAGE_DEBOUNCE_MS
   });
@@ -5913,23 +5930,14 @@ export class Think<
           this._lastClientTools = event.clientTools as ClientToolSchema[];
           this._persistClientTools();
         }
-        const resultPromise = Promise.resolve().then(async () => {
-          await this._applyToolResult(
+        this._enqueueInteractionApply(() =>
+          this._applyToolResult(
             event.toolCallId,
             event.output,
             event.state as "output-error" | undefined,
             event.errorText
-          );
-          return true;
-        });
-        this._pendingInteractionPromise = resultPromise;
-        resultPromise
-          .finally(() => {
-            if (this._pendingInteractionPromise === resultPromise) {
-              this._pendingInteractionPromise = null;
-            }
-          })
-          .catch(() => {});
+          )
+        );
         if (event.autoContinue) {
           this._scheduleAutoContinuation(connection);
         }
@@ -5937,18 +5945,9 @@ export class Think<
       }
 
       case "tool-approval": {
-        const approvalPromise = Promise.resolve().then(async () => {
-          await this._applyToolApproval(event.toolCallId, event.approved);
-          return true;
-        });
-        this._pendingInteractionPromise = approvalPromise;
-        approvalPromise
-          .finally(() => {
-            if (this._pendingInteractionPromise === approvalPromise) {
-              this._pendingInteractionPromise = null;
-            }
-          })
-          .catch(() => {});
+        this._enqueueInteractionApply(() =>
+          this._applyToolApproval(event.toolCallId, event.approved)
+        );
         if (event.autoContinue) {
           this._scheduleAutoContinuation(connection);
         }
@@ -6313,6 +6312,12 @@ export class Think<
     }
     this._submitConcurrency.reset();
     this._pendingInteractionPromise = null;
+    // Drop the apply chain so new interactions don't serialize behind a stale
+    // (possibly hung) apply from the turn we just reset (#1649).
+    this._interactionApplyTail = Promise.resolve();
+    // The streaming turn (if any) is being torn down; stop exposing its
+    // accumulator so a late tool result doesn't apply to an abandoned message.
+    this._streamingAssistant = null;
     this._continuationBarrierActive = false;
     this._continuation.sendResumeNone();
     this._continuation.clearAll();
@@ -6393,6 +6398,10 @@ export class Think<
     const accumulator = new StreamAccumulator({
       messageId: crypto.randomUUID()
     });
+    // Expose the in-flight message so a client tool result arriving before the
+    // end-of-stream persist lands on the accumulator instead of being dropped
+    // (#1649). Cleared in the `finally` below.
+    this._streamingAssistant = accumulator;
 
     let streamFinalized = false;
     let assistantMsg: UIMessage | null = null;
@@ -6617,6 +6626,11 @@ export class Think<
       }
 
       await callback.onError(errorMessage);
+    } finally {
+      // The message is now durably persisted (success, error, or recovery
+      // path), so subsequent tool results resolve against storage; stop
+      // exposing the sealed accumulator (#1649).
+      this._streamingAssistant = null;
     }
 
     if (pendingRpcError) {
@@ -6787,6 +6801,10 @@ export class Think<
     const accumulator = new StreamAccumulator({
       messageId: crypto.randomUUID()
     });
+    // Expose the in-flight message so a client tool result arriving before the
+    // end-of-stream persist lands on the accumulator instead of being dropped
+    // (#1649). Cleared before every return path below.
+    this._streamingAssistant = accumulator;
 
     let doneSent = false;
     let streamAborted = false;
@@ -6938,6 +6956,7 @@ export class Think<
           // the scheduled continuation owns the real terminal outcome. No
           // response hook fires here (the continuation fires it), mirroring how
           // a deploy-interrupted attempt is superseded by its continuation.
+          this._streamingAssistant = null;
           return { status: "aborted" };
         }
         if (outcome === "exhausted") {
@@ -6949,6 +6968,7 @@ export class Think<
           this._resumableStream.markError(streamId);
           this._pendingResumeConnections.clear();
           doneSent = true;
+          this._streamingAssistant = null;
           return { status: "aborted" };
         }
         // outcome === "disabled" (chat recovery off): fall through to the
@@ -7028,6 +7048,10 @@ export class Think<
       }
     }
 
+    // The message is now persisted (or the turn was cleared), so subsequent
+    // tool results resolve against storage; stop exposing the accumulator.
+    this._streamingAssistant = null;
+
     return streamError
       ? { status: "error", error: streamError }
       : {
@@ -7100,6 +7124,49 @@ export class Think<
 
   // ── Tool state updates (shared primitives from agents/chat) ─────
 
+  /**
+   * Serialize a client-tool result/approval apply behind any in-flight apply
+   * (#1649). Parallel tool results arrive as independent WebSocket messages,
+   * and each apply is a read-modify-write of the full message in durable
+   * storage. Running them concurrently means every apply reads the same
+   * snapshot (all siblings still `input-available`), patches only its own part,
+   * and writes the whole message back — so the last write clobbers the others
+   * back to `input-available`, and the auto-continuation barrier later times
+   * out and the transcript-repair backstop errors the lost siblings.
+   *
+   * Chaining each apply off `_interactionApplyTail` makes the read-modify-write
+   * atomic per result and in arrival order. `_pendingInteractionPromise` is set
+   * to the newest link so the barrier's single-slot wake-up still observes the
+   * latest apply; because the chain is serial, awaiting it transitively waits
+   * for every predecessor.
+   *
+   * @internal
+   */
+  protected _enqueueInteractionApply(
+    apply: () => Promise<void>
+  ): Promise<boolean> {
+    const run = async (): Promise<boolean> => {
+      await apply();
+      return true;
+    };
+    // `.then(run, run)` runs regardless of a predecessor's outcome so one
+    // rejected apply can't poison the rest of the batch.
+    const resultPromise = this._interactionApplyTail.then(run, run);
+    this._interactionApplyTail = resultPromise.then(
+      () => undefined,
+      () => undefined
+    );
+    this._pendingInteractionPromise = resultPromise;
+    resultPromise
+      .finally(() => {
+        if (this._pendingInteractionPromise === resultPromise) {
+          this._pendingInteractionPromise = null;
+        }
+      })
+      .catch(() => {});
+    return resultPromise;
+  }
+
   private async _applyToolResult(
     toolCallId: string,
     output: unknown,
@@ -7128,6 +7195,39 @@ export class Think<
     matchStates: string[];
     apply: (part: Record<string, unknown>) => Record<string, unknown>;
   }): Promise<void> {
+    // The message to update can live in two places. During a streaming turn
+    // the assistant message exists ONLY in the in-flight accumulator until
+    // `_persistAssistantMessage` writes it at a turn boundary; a parallel-
+    // batch sibling can also have been persisted already by stall recovery.
+    // Apply to BOTH so the result is correct regardless of where the message
+    // currently is and survives the eventual `accumulator.toMessage()` persist
+    // (which would otherwise downgrade an applied result back to
+    // `input-available` — #1649). Mirrors `@cloudflare/ai-chat`'s streaming-
+    // message handling, generalized to also cover the post-persist case.
+    let broadcastMessage: UIMessage | undefined;
+
+    // (1) In-flight accumulator. A client tool result that arrives over the
+    // WebSocket before the end-of-stream persist would be missed by a
+    // storage-only lookup and later repaired as "interrupted". Writing it in
+    // place lets it ride into the persist.
+    const streaming = this._streamingAssistant;
+    if (streaming) {
+      const accParts = streaming.parts as unknown as Array<
+        Record<string, unknown>
+      >;
+      const result = applyToolUpdate(accParts, update);
+      if (result && result.parts[result.index] !== accParts[result.index]) {
+        // `accParts` is a typed alias of the accumulator's live array, so this
+        // in-place write is reflected by `streaming.toMessage()` and the
+        // eventual end-of-stream persist.
+        accParts[result.index] = result.parts[result.index];
+        broadcastMessage = streaming.toMessage();
+      }
+    }
+
+    // (2) Durable storage. Handles messages already persisted — including
+    // partials written mid-stream by stall recovery and cross-message tool
+    // results that target an earlier message than this turn's.
     const history = await this._readMessagesFromStorage();
     for (let i = 0; i < history.length; i++) {
       const msg = history[i];
@@ -7140,7 +7240,7 @@ export class Think<
         // nothing to persist. Skip the durable write and the redundant
         // `MESSAGE_UPDATED` broadcast so clients don't churn on a no-op.
         if (result.parts[result.index] === msgParts[result.index]) {
-          return;
+          break;
         }
         const updatedMsg = {
           ...msg,
@@ -7158,9 +7258,16 @@ export class Think<
         // and 6e76bd49 "update cached messages in-place"). The cache is
         // the source of truth during a turn; we only reconcile it here to
         // reflect the tool update that was just written to storage.
-        this._broadcast({ type: MSG_MESSAGE_UPDATED, message: safe });
-        return;
+        broadcastMessage = safe;
+        break;
       }
+    }
+
+    if (broadcastMessage) {
+      this._broadcast({
+        type: MSG_MESSAGE_UPDATED,
+        message: broadcastMessage
+      });
     }
   }
 
@@ -8713,6 +8820,13 @@ export class Think<
    * repair backstop rather than pinning the continuation open forever.
    */
   private _fireAutoContinuationWhenStable(connection: Connection): void {
+    // NOTE: when a result arrives mid-stream, the in-flight assistant message
+    // lives only in `_streamingAssistant` and is NOT yet in `this.messages`, so
+    // `_hasIncompleteToolBatch()` here inspects a stale (prior) leaf. That does
+    // not break correctness: the continuation is enqueued behind the active
+    // streaming turn on the turn queue, and that turn persists the (now
+    // settled) result before the continuation's transcript repair runs. The
+    // ordering guarantee is the turn queue, not this barrier's cache view.
     if (!this._continuation.pending) return;
     // The continuation is already running (a sibling result re-armed the timer
     // after it started). New results coalesce/defer into it — don't double-fire.
