@@ -24,7 +24,7 @@
     "url": "https://github.com/cloudflare/agents/issues"
   },
   "dependencies": {
-    "@babel/plugin-proposal-decorators": "^7.29.0",
+    "@babel/plugin-proposal-decorators": "^7.29.7",
     "@cfworker/json-schema": "^4.1.1",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@rolldown/plugin-babel": "^0.2.3",
@@ -37,19 +37,19 @@
     "yargs": "^18.0.0"
   },
   "devDependencies": {
-    "@ai-sdk/react": "^3.0.187",
+    "@ai-sdk/react": "^3.0.196",
     "@cloudflare/codemode": "*",
     "@cloudflare/worker-bundler": "*",
-    "@tanstack/ai": "^0.18.0",
-    "@types/react": "^19.2.14",
+    "@tanstack/ai": "^0.26.1",
+    "@types/react": "^19.2.16",
     "@types/yargs": "^17.0.35",
-    "@vitest/browser-playwright": "^4.1.6",
-    "@x402/core": "^2.12.0",
-    "@x402/evm": "^2.12.0",
-    "ai": "^6.0.185",
-    "chat": "^4.29.0",
+    "@vitest/browser-playwright": "^4.1.8",
+    "@x402/core": "^2.14.0",
+    "@x402/evm": "^2.14.0",
+    "ai": "^6.0.194",
+    "chat": "^4.30.0",
     "just-bash": "^3.0.1",
-    "react": "^19.2.6",
+    "react": "^19.2.7",
     "vitest-browser-react": "^2.2.0",
     "zod": "^4.4.3"
   },

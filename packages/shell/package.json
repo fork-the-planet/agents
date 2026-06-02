@@ -12,11 +12,11 @@
   },
   "dependencies": {
     "@cloudflare/codemode": "*",
-    "isomorphic-git": "^1.38.1"
+    "isomorphic-git": "^1.38.3"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.16.7",
-    "vitest": "4.1.6"
+    "@cloudflare/vitest-pool-workers": "^0.16.11",
+    "vitest": "4.1.8"
   },
   "types": "dist/index.d.ts",
   "exports": {
