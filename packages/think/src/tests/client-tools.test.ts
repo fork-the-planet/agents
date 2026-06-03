@@ -1441,6 +1441,96 @@ describe("Think — auto-continuation", () => {
     await closeWS(ws);
   }, 20000);
 
+  it("does not pin the isolate when a sibling result never arrives — client disconnect mid-batch (#1650)", async () => {
+    const room = crypto.randomUUID();
+    const agent = await freshAgent(room);
+    const { ws } = await connectWS(room);
+    await collectMessages(ws, 3);
+
+    // Parallel batch: the fast tool resolves with autoContinue, the slow sibling
+    // never does — the client disconnects mid-batch. The event-driven barrier
+    // must leave the continuation pending (so a future result could still
+    // complete it) WITHOUT firing through and WITHOUT holding the isolate alive
+    // on a fixed timer.
+    await agent.persistToolCallMessage([
+      makeUserMessage("use two tools"),
+      {
+        id: "assistant-orphan",
+        role: "assistant",
+        parts: [
+          {
+            type: "tool-client_action",
+            toolCallId: "tc-fast",
+            toolName: "client_action",
+            state: "input-available",
+            input: { action: "fast" }
+          },
+          {
+            type: "tool-client_action",
+            toolCallId: "tc-gone",
+            toolName: "client_action",
+            state: "input-available",
+            input: { action: "gone" }
+          }
+        ]
+      } as unknown as UIMessage
+    ]);
+    await agent.clearResponseLog();
+
+    const repairedToolCallIds: Array<string[] | undefined> = [];
+    const unsubscribe = subscribe("transcript", (event) => {
+      if (event.type === "chat:transcript:repaired" && event.name === room) {
+        repairedToolCallIds.push(event.payload.toolCallIds);
+      }
+    });
+
+    try {
+      // The fast result lands and opts into continuation; then the client goes
+      // away — the slow sibling's result will never arrive.
+      ws.send(
+        JSON.stringify({
+          type: MSG_TOOL_RESULT,
+          toolCallId: "tc-fast",
+          toolName: "client_action",
+          output: "fast output",
+          autoContinue: true
+        })
+      );
+      await closeWS(ws);
+
+      // Wait well past the coalesce window and the old 60s-style fire-through.
+      await delay(1500);
+
+      // No continuation fired and the orphaned sibling was NOT repaired to
+      // errored while it was legitimately just never answered.
+      const log = (await agent.getResponseLog()) as ChatResponseResult[];
+      expect(log.filter((entry) => entry.continuation).length).toBe(0);
+      expect(repairedToolCallIds.flat()).not.toContain("tc-gone");
+
+      // The continuation is still pending in memory (a later result could finish
+      // the batch), but nothing pins the isolate: the drain has completed
+      // (barrierActive false) and no coalesce timer is armed waiting on a sibling
+      // that will never come.
+      const barrier = await agent.getContinuationBarrierState();
+      expect(barrier.hasPending).toBe(true);
+      expect(barrier.barrierActive).toBe(false);
+      expect(barrier.timerArmed).toBe(false);
+
+      // The orphaned sibling is still awaiting its client result, untouched.
+      const messages = (await agent.getMessages()) as UIMessage[];
+      const partFor = (toolCallId: string) =>
+        messages
+          .find((m) => m.id === "assistant-orphan")!
+          .parts.find(
+            (p) => (p as Record<string, unknown>).toolCallId === toolCallId
+          ) as Record<string, unknown>;
+      expect(partFor("tc-fast").state).toBe("output-available");
+      expect(partFor("tc-gone").state).toBe("input-available");
+    } finally {
+      unsubscribe();
+    }
+  }, 20000);
+
   it("continues when an errored sibling (autoContinue:false) completes the batch (#1650)", async () => {
     const room = crypto.randomUUID();
     const agent = await freshAgent(room);

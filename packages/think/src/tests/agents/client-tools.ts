@@ -779,6 +779,31 @@ export class ThinkClientToolsAgent extends Think {
   }
 
   /**
+   * Snapshot the event-driven barrier's in-memory state (#1650). Lets a test
+   * assert that an orphaned batch (a sibling result that never arrives, e.g. the
+   * client disconnected mid-batch) leaves the continuation pending in memory but
+   * does NOT pin the isolate: no drain in progress (`barrierActive` false) and no
+   * armed coalesce timer (`timerArmed` false). The pending stays so the next
+   * result — if it ever comes — can complete the batch.
+   */
+  async getContinuationBarrierState(): Promise<{
+    hasPending: boolean;
+    barrierActive: boolean;
+    timerArmed: boolean;
+  }> {
+    const internal = this as unknown as {
+      _continuation: { pending: unknown };
+      _continuationTimer: ReturnType<typeof setTimeout> | null;
+      _continuationBarrierActive: boolean;
+    };
+    return {
+      hasPending: internal._continuation.pending != null,
+      barrierActive: internal._continuationBarrierActive,
+      timerArmed: internal._continuationTimer != null
+    };
+  }
+
+  /**
    * Simulate the in-memory auto-continuation state being lost to eviction
    * WITHOUT touching the persisted transcript (#1650). A real eviction drops
    * `_continuation.pending` and the coalesce timer but leaves messages in
