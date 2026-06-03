@@ -654,18 +654,26 @@ const CHAT_RECOVERY_PROGRESS_KEY = "cf:chat-recovery:progress";
 // first under normal deploy cadence (#1637).
 const DEFAULT_CHAT_RECOVERY_MAX_ATTEMPTS = 10;
 const DEFAULT_CHAT_RECOVERY_STABLE_TIMEOUT_MS = 10_000;
-// Auto-continuation barrier (#1649): when the model emits parallel tool calls,
-// the client answers each one independently and sends a `tool-result` with
-// `autoContinue` per result. A fast tool's result must NOT trigger inference
-// while a slower sibling is still `input-available` — doing so feeds the
-// provider an incomplete tool-result set (MissingToolResultsError) or, with the
-// transcript-repair backstop, silently flips the in-flight sibling to errored
-// and runs a spurious extra continuation. So we hold the continuation until the
-// step's batch settles (no `input-available`/`approval-requested` siblings),
-// bounded by this timeout so a genuinely orphaned tool call (e.g. the client
-// disconnected mid-batch) still falls through to the repair backstop instead of
-// pinning the continuation open forever.
-const AUTO_CONTINUATION_PENDING_TOOL_TIMEOUT_MS = 60_000;
+// Auto-continuation barrier (#1649 / #1650): when the model emits parallel tool
+// calls, the client answers each one independently and sends a `tool-result`
+// with `autoContinue` per result. A fast tool's result must NOT trigger
+// inference while a slower sibling is still `input-available` — doing so feeds
+// the provider an incomplete tool-result set (MissingToolResultsError) or, with
+// the transcript-repair backstop, silently flips the in-flight sibling to
+// errored and runs a spurious extra continuation. So we hold the continuation
+// until the step's batch settles (no `input-available`/`approval-requested`
+// siblings).
+//
+// The barrier is event-driven (#1650): auto-continuation is only ever triggered
+// by a tool-result/approval event, so instead of waiting on a fixed timer we
+// drain the in-flight applies, re-check, and — if a sibling is still unanswered
+// — simply return, leaving the pending continuation in place. The next sibling's
+// result re-arms the coalesce timer (or, after eviction, re-creates the pending
+// state from the persisted transcript) and re-runs the check; the continuation
+// fires once the final sibling lands. This means a legitimately slow answer (a
+// human-in-the-loop tool with no `execute`, an unbounded RPC) never fires
+// through to a spurious error, and a true orphan (a sibling that never arrives)
+// simply never auto-continues — the isolate is not pinned waiting for it.
 // Delay before retrying a continuation that timed out waiting for stable state.
 // Gives an actively-churning isolate (e.g. a deploy in flight) time to settle.
 const CHAT_RECOVERY_STABLE_RETRY_DELAY_SECONDS = 3;
@@ -1897,9 +1905,11 @@ export class Think<
   private _lastBody: Record<string, unknown> | undefined;
   private _continuation = new ContinuationState<Connection>();
   private _continuationTimer: ReturnType<typeof setTimeout> | null = null;
-  // True while a continuation is parked on the parallel-tool-batch barrier
-  // (#1649) waiting for in-flight tool results/approvals to settle. Prevents a
-  // second barrier wait (and a double-fire) when more results arrive mid-wait.
+  // True while a continuation is draining the in-flight tool-result/approval
+  // applies on the parallel-tool-batch barrier (#1649 / #1650). Prevents a
+  // second drain (and a double-fire) when more results arrive mid-drain — a
+  // sibling that re-arms the coalesce timer during a drain is absorbed by the
+  // in-progress drain rather than starting its own.
   private _continuationBarrierActive = false;
   private _insideResponseHook = false;
   private _insideInferenceLoop = false;
@@ -5954,6 +5964,8 @@ export class Think<
         );
         if (event.autoContinue) {
           this._scheduleAutoContinuation(connection);
+        } else {
+          this._rearmPendingAutoContinuationForBatch();
         }
         break;
       }
@@ -5964,6 +5976,8 @@ export class Think<
         );
         if (event.autoContinue) {
           this._scheduleAutoContinuation(connection);
+        } else {
+          this._rearmPendingAutoContinuationForBatch();
         }
         break;
       }
@@ -6655,8 +6669,9 @@ export class Think<
     } finally {
       // The message is now durably persisted (success, error, or recovery
       // path), so subsequent tool results resolve against storage; stop
-      // exposing the sealed accumulator (#1649).
-      this._streamingAssistant = null;
+      // exposing the sealed accumulator (#1649) and re-check any continuation
+      // the stream-active barrier held (#1650).
+      this._onStreamingTurnFinalized();
     }
 
     if (pendingRpcError) {
@@ -6994,6 +7009,8 @@ export class Think<
           // the scheduled continuation owns the real terminal outcome. No
           // response hook fires here (the continuation fires it), mirroring how
           // a deploy-interrupted attempt is superseded by its continuation.
+          // Plain clear (no auto-continuation re-check): recovery re-runs the
+          // turn and its own stream finalize re-triggers the held barrier.
           this._streamingAssistant = null;
           return { status: "aborted" };
         }
@@ -7087,8 +7104,9 @@ export class Think<
     }
 
     // The message is now persisted (or the turn was cleared), so subsequent
-    // tool results resolve against storage; stop exposing the accumulator.
-    this._streamingAssistant = null;
+    // tool results resolve against storage; stop exposing the accumulator and
+    // re-check any continuation the stream-active barrier held (#1650).
+    this._onStreamingTurnFinalized();
 
     return streamError
       ? { status: "error", error: streamError }
@@ -9006,6 +9024,42 @@ export class Think<
     this._resetAutoContinuationTimer();
   }
 
+  /**
+   * Re-arm the barrier for a tool result/approval that arrived WITHOUT
+   * `autoContinue` (#1650). The client sends `autoContinue: false` for an
+   * errored tool result (it declines to auto-continue a standalone error), but
+   * in a parallel batch a SIBLING may already have requested continuation — and
+   * this result can be the one that completes the batch. In that case we must
+   * re-run the barrier check so the continuation the sibling requested still
+   * fires once the batch is whole.
+   *
+   * Unlike `_scheduleAutoContinuation` this never CREATES a pending
+   * continuation: a standalone errored tool (no opted-in sibling, so no pending)
+   * must not auto-continue. It also no-ops once the continuation is running
+   * (`pastCoalesce`) — a late result then defers/applies through the normal
+   * path rather than re-arming.
+   */
+  private _rearmPendingAutoContinuationForBatch(): void {
+    const pending = this._continuation.pending;
+    if (!pending || pending.pastCoalesce) return;
+    this._resetAutoContinuationTimer();
+  }
+
+  /**
+   * Called when a streaming assistant turn finalizes (its message, with ALL
+   * tool parts, is now persisted). Clears the in-flight accumulator and re-runs
+   * the auto-continuation barrier for a continuation the stream-active gate held
+   * (#1650). This is essential for an all-fast parallel batch whose every result
+   * landed mid-stream: once the stream ends there is no further tool-result
+   * event to re-arm the barrier, so without this re-check the held continuation
+   * would never fire. A slow batch is also re-checked here and simply continues
+   * to hold (event-driven) until its remaining siblings answer.
+   */
+  private _onStreamingTurnFinalized(): void {
+    this._streamingAssistant = null;
+    this._rearmPendingAutoContinuationForBatch();
+  }
+
   private _resetAutoContinuationTimer(): void {
     if (this._continuationTimer) {
       clearTimeout(this._continuationTimer);
@@ -9025,85 +9079,105 @@ export class Think<
    * arrives while slower siblings are still `input-available`. Continuing then
    * would feed the provider an incomplete tool-result set
    * (`MissingToolResultsError`) or, via the transcript-repair backstop, silently
-   * error the in-flight sibling and run a spurious extra continuation. We hold
-   * the continuation on a barrier until the batch settles. The wait is bounded
-   * (`AUTO_CONTINUATION_PENDING_TOOL_TIMEOUT_MS`) so a genuinely orphaned tool
-   * call — e.g. the client disconnected mid-batch — still falls through to the
-   * repair backstop rather than pinning the continuation open forever.
+   * error the in-flight sibling and run a spurious extra continuation.
+   *
+   * The barrier is event-driven (#1650). Auto-continuation is only ever
+   * triggered by a tool-result/approval event, so rather than wait on a fixed
+   * timer we drain the in-flight applies, re-check, and — if the batch is still
+   * incomplete — return WITHOUT firing and WITHOUT holding the isolate, leaving
+   * `_continuation.pending` in place. The next sibling's result re-arms the
+   * coalesce timer (`_scheduleAutoContinuation`) and re-runs this check; the
+   * continuation fires once the final sibling lands. If the in-memory pending
+   * state is lost to eviction between siblings, the final result re-creates it
+   * from the persisted transcript and fires with a complete batch — self-healing.
+   * A true orphan (a sibling that never arrives) simply never auto-continues,
+   * which is correct: there is nothing valid to continue, and a later user turn
+   * / chat recovery repairs the transcript.
+   *
+   * The barrier also holds while the assistant turn is still streaming (the
+   * stream-active gate below): mid-stream the batch can still grow with tool
+   * calls the model hasn't emitted yet, so no completeness check is meaningful.
+   * `_onStreamingTurnFinalized` re-runs the check once the stream ends.
    */
   private _fireAutoContinuationWhenStable(connection: Connection): void {
-    // NOTE: when a result arrives mid-stream, the in-flight assistant message
-    // lives only in `_streamingAssistant` and is NOT yet in `this.messages`, so
-    // `_hasIncompleteToolBatch()` here inspects a stale (prior) leaf. That does
-    // not break correctness: the continuation is enqueued behind the active
-    // streaming turn on the turn queue, and that turn persists the (now
-    // settled) result before the continuation's transcript repair runs. The
-    // ordering guarantee is the turn queue, not this barrier's cache view.
     if (!this._continuation.pending) return;
     // The continuation is already running (a sibling result re-armed the timer
     // after it started). New results coalesce/defer into it — don't double-fire.
     if (this._continuation.pending.pastCoalesce) return;
-    // A barrier wait is already in progress; it will fire once stable. Each
-    // newly-arrived result re-arms the 50ms timer, but only one wait must run.
+    // A drain is already in progress; the sibling that re-armed the timer is
+    // absorbed by it. Only one drain must run, and it re-checks on completion.
     if (this._continuationBarrierActive) return;
+    // Stream-active gate (#1650, #1649). While the model is still streaming the
+    // assistant turn we CANNOT know the parallel tool batch is complete: the
+    // model emits tool calls sequentially, so a fast client tool can resolve
+    // before its slower siblings have even been streamed. At that point the
+    // siblings exist nowhere — not in `this.messages`, not in the in-flight
+    // `_streamingAssistant` accumulator — so no batch check can see them, and
+    // firing now would enqueue a continuation that repairs the (later
+    // materialized, still-pending) siblings to errored. The only signal that
+    // "more tool calls may still arrive" is that the stream is open, so we hold
+    // without firing. `_onStreamingTurnFinalized` re-runs this check once the
+    // stream ends and the batch is fully materialized, and any later sibling
+    // result re-arms it via `_scheduleAutoContinuation`.
+    if (this._streamingAssistant) return;
     // Fast path: no apply in flight and the leaf step is not mid-batch.
     if (!this._pendingInteractionPromise && !this._hasIncompleteToolBatch()) {
       this._fireAutoContinuation(connection);
       return;
     }
     this._continuationBarrierActive = true;
-    // keepAlive so the isolate stays up while the (typically sub-second)
-    // remainder of the tool batch lands — the pending-continuation state is
-    // in-memory, so hibernating mid-wait would drop it.
-    this.keepAliveWhile(() => this._awaitToolBatch())
+    // keepAlive only for the bounded drain — the duration of the applies that
+    // have ALREADY arrived, not an open-ended wait for siblings that haven't.
+    // The pending-continuation state is in-memory, so we must not hibernate
+    // mid-apply; once the drain returns we release and let the isolate idle.
+    this.keepAliveWhile(() => this._drainInteractionApplies())
       .catch(() => {})
       .finally(() => {
+        // Clear the flag and re-check synchronously — no `await` between here
+        // and the fire/return decision, so a sibling-armed coalesce timer (a
+        // macrotask) cannot interleave and double-fire. `_fireAutoContinuation`
+        // cancels that timer; the incomplete-return path leaves it armed so the
+        // sibling that armed it re-runs this check when it fires.
         this._continuationBarrierActive = false;
-        // Fire whether the batch settled or the wait timed out: on timeout the
-        // transcript-repair backstop handles the genuine orphan exactly as it
-        // did before this barrier existed.
         const pending = this._continuation.pending;
-        if (pending) this._fireAutoContinuation(pending.connection);
+        if (!pending || pending.pastCoalesce) return;
+        // A stream (re)started during the drain — hold; the finalize re-trigger
+        // will re-check once the batch is fully materialized.
+        if (this._streamingAssistant) return;
+        // Still waiting on an unanswered sibling — return without firing. The
+        // result that completes the batch re-triggers this check via its own
+        // `_scheduleAutoContinuation`; we do not pin the isolate in the interim.
+        if (this._hasIncompleteToolBatch()) return;
+        this._fireAutoContinuation(pending.connection);
       });
   }
 
   /**
-   * Block until the latest assistant step's parallel tool batch is fully
-   * answered, or `AUTO_CONTINUATION_PENDING_TOOL_TIMEOUT_MS` elapses. Awaits the
-   * in-flight tool-result apply when one exists (so a sibling that lands
-   * mid-wait is observed promptly) and polls otherwise.
+   * Drain every in-flight tool-result/approval apply, including any enqueued
+   * while we wait, so the subsequent `_hasIncompleteToolBatch()` re-check sees
+   * every result that has ALREADY arrived. Bounded by real apply activity (a
+   * storage write each), never by a fixed timer: a batch with no further
+   * results drains in the time its pending applies take and then returns. The
+   * loop re-reads `_interactionApplyTail` after each await because a sibling can
+   * extend the tail mid-drain; we stop once the tail stops advancing.
    */
-  private async _awaitToolBatch(): Promise<void> {
-    const deadline = Date.now() + AUTO_CONTINUATION_PENDING_TOOL_TIMEOUT_MS;
-    while (Date.now() < deadline) {
+  private async _drainInteractionApplies(): Promise<void> {
+    let tail = this._interactionApplyTail;
+    // Bounded: each iteration only continues if a NEW apply was chained during
+    // the await, and applies are not self-perpetuating (only an inbound result
+    // enqueues one), so the tail necessarily stabilizes.
+    for (;;) {
       // The pending continuation was cleared (chat clear / turn reset) — nothing
-      // to wait for; bail so the isolate isn't held by a stale wait.
+      // to drain for; bail so the isolate isn't held by a stale drain.
       if (!this._continuation.pending) return;
-      const pending = this._pendingInteractionPromise;
-      if (pending) {
-        // `_pendingInteractionPromise` is a single slot — awaiting it is only a
-        // "wake up as soon as an apply lands" optimization, NOT the correctness
-        // gate. If sibling results arrive together one overwrites the other, but
-        // each apply still patches the message cache; the real gate is
-        // `_hasIncompleteToolBatch()` re-checked on the next loop. A rejected
-        // apply is likewise irrelevant — we just re-check.
-        try {
-          await pending;
-        } catch {
-          // Ignore — re-evaluate the batch below.
-        }
-        continue;
+      try {
+        await tail;
+      } catch {
+        // A rejected apply is irrelevant to completeness — re-read and re-check.
       }
-      if (!this._hasIncompleteToolBatch()) return;
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      if (this._interactionApplyTail === tail) return;
+      tail = this._interactionApplyTail;
     }
-    // Timed out with the batch still incomplete: a sibling tool result never
-    // arrived (e.g. the client disconnected mid-batch). Proceed anyway — the
-    // transcript-repair backstop errors the unanswered call rather than
-    // pinning the continuation open forever.
-    console.warn(
-      `[Think] Auto-continuation proceeding after waiting ${AUTO_CONTINUATION_PENDING_TOOL_TIMEOUT_MS}ms for unanswered parallel tool result(s) (#1649).`
-    );
   }
 
   /**
