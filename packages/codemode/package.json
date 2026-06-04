@@ -17,8 +17,8 @@
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
     "@playwright/test": "^1.60.0",
-    "@tanstack/ai": "^0.26.1",
-    "ai": "^6.0.194",
+    "@tanstack/ai": "^0.27.0",
+    "ai": "^6.0.196",
     "vitest": "4.1.8",
     "zod": "^4.4.3"
   },
