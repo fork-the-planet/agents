@@ -1,7 +1,7 @@
 ---
-"@cloudflare/ai-chat": minor
-"@cloudflare/think": minor
-"agents": minor
+"@cloudflare/ai-chat": patch
+"@cloudflare/think": patch
+"agents": patch
 ---
 
 fix(chat-recovery): a turn making forward progress now survives unbounded deploy churn; add a work budget + `shouldKeepRecovering` runaway guard
