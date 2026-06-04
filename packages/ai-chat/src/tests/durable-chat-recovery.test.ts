@@ -46,7 +46,10 @@ interface ChatRecoveryTestStub {
   setChatRecoveryConfigForTest(config: {
     maxAttempts?: number;
     terminalMessage?: string;
+    maxRecoveryWork?: number;
+    noProgressTimeoutMs?: number;
   }): Promise<void>;
+  setShouldKeepRecoveringForTest(keepRecovering: boolean): Promise<void>;
   getChatRecoveryIncidentsForTest(): Promise<unknown[]>;
   addAssistantMessageForTest(id: string): Promise<void>;
   bumpRecoveryProgressForTest(): Promise<void>;
@@ -92,6 +95,9 @@ interface ChatRecoveryTestStub {
     status: string;
     firstSeenAt: number;
     lastAttemptAt: number;
+    lastProgressAt?: number;
+    progress?: number;
+    workBaseline?: number;
   }): Promise<void>;
   setForceStableTimeoutForTest(value: boolean): Promise<void>;
   runChatRecoveryContinueDirectForTest(
@@ -417,12 +423,13 @@ describe("onChatRecovery", () => {
     expect(afterProgress.exhausted).toBe(false);
   });
 
-  it("exhausts via the wall-clock window even while making progress", async () => {
+  it("a progressing turn survives past the old wall-clock ceiling (rfc-chat-recovery-work-budget)", async () => {
     const room = crypto.randomUUID();
     const agentStub = await getTestAgent(room);
+    // Default config: maxRecoveryWork is Infinity, so duration is never a bound.
     await agentStub.setChatRecoveryConfigForTest({ maxAttempts: 6 });
 
-    // An incident that opened more than the 15-minute window ago.
+    // An incident that opened well past the old 15-minute ceiling.
     await agentStub.seedIncidentForTest({
       incidentId: "req-old:u1",
       requestId: "req-old",
@@ -430,11 +437,12 @@ describe("onChatRecovery", () => {
       attempt: 1,
       maxAttempts: 6,
       status: "scheduled",
-      firstSeenAt: Date.now() - 16 * 60 * 1000,
+      firstSeenAt: Date.now() - 30 * 60 * 1000,
       lastAttemptAt: Date.now() - 1000
     });
 
-    // Even with fresh progress, the wall-clock ceiling terminalizes it.
+    // Fresh forward progress: the turn is healthy. It must NOT be sealed —
+    // wall-clock age no longer terminalizes a progressing turn.
     await agentStub.bumpRecoveryProgressForTest();
     const next = await agentStub.beginIncidentForTest({
       requestId: "req-old-2",
@@ -442,17 +450,77 @@ describe("onChatRecovery", () => {
       latestUserMessageId: "u1",
       recoveryKind: "continue"
     });
-    expect(next.exhausted).toBe(true);
+    expect(next.exhausted).toBe(false);
+    expect(next.attempt).toBe(1);
 
     const incidents =
       (await agentStub.getChatRecoveryIncidentsForTest()) as Array<{
         status: string;
         reason?: string;
       }>;
-    expect(incidents[0]).toMatchObject({
-      status: "exhausted",
-      reason: "max_recovery_window_exceeded"
+    expect(incidents[0]).toMatchObject({ status: "attempting" });
+    expect(incidents[0]?.reason).toBeUndefined();
+  });
+
+  it("seals a content-emitting runaway via the work budget", async () => {
+    const room = crypto.randomUUID();
+    const agentStub = await getTestAgent(room);
+    await agentStub.setChatRecoveryConfigForTest({
+      maxAttempts: 100,
+      maxRecoveryWork: 2
     });
+
+    const base = {
+      requestId: "req-runaway",
+      recoveryRootRequestId: "req-runaway",
+      latestUserMessageId: "u1",
+      recoveryKind: "continue" as const
+    };
+    let t = 5_000_000;
+    const at = (): typeof base & { nowMs: number } => {
+      const nowMs = t;
+      t += 40_000;
+      return { ...base, nowMs };
+    };
+
+    // Open the incident — the work baseline is captured at the current marker.
+    expect((await agentStub.beginIncidentForTest(at())).attempt).toBe(1);
+
+    // Three units of new content → work since the incident opened = 3 > budget
+    // (2), even though every unit is genuine forward progress.
+    await agentStub.bumpRecoveryProgressForTest();
+    await agentStub.bumpRecoveryProgressForTest();
+    await agentStub.bumpRecoveryProgressForTest();
+    const next = await agentStub.beginIncidentForTest(at());
+    expect(next.exhausted).toBe(true);
+    expect(next.reason).toBe("work_budget_exceeded");
+  });
+
+  it("seals when the shouldKeepRecovering predicate returns false (recovery_aborted)", async () => {
+    const room = crypto.randomUUID();
+    const agentStub = await getTestAgent(room);
+    await agentStub.setShouldKeepRecoveringForTest(false);
+
+    const base = {
+      requestId: "req-abort",
+      recoveryRootRequestId: "req-abort",
+      latestUserMessageId: "u1",
+      recoveryKind: "continue" as const
+    };
+    let t = 6_000_000;
+    const at = (): typeof base & { nowMs: number } => {
+      const nowMs = t;
+      t += 40_000;
+      return { ...base, nowMs };
+    };
+
+    // First detection opens the incident (predicate isn't consulted on open).
+    expect((await agentStub.beginIncidentForTest(at())).exhausted).toBe(false);
+
+    // Next attempt — below every hard bound, so only the caller predicate fires.
+    const next = await agentStub.beginIncidentForTest(at());
+    expect(next.exhausted).toBe(true);
+    expect(next.reason).toBe("recovery_aborted");
   });
 
   it("seals an incident after the no-progress window even below the attempt cap (#1637)", async () => {
@@ -476,6 +544,36 @@ describe("onChatRecovery", () => {
     const past = await agentStub.beginIncidentForTest({
       ...base,
       nowMs: t0 + 6 * 60 * 1000
+    });
+    expect(past.exhausted).toBe(true);
+    expect(past.reason).toBe("no_progress_timeout");
+  });
+
+  it("honors a custom noProgressTimeoutMs override", async () => {
+    const room = crypto.randomUUID();
+    const agentStub = await getTestAgent(room);
+    // A tight 1-min no-progress window instead of the 5-min default.
+    await agentStub.setChatRecoveryConfigForTest({
+      maxAttempts: 100,
+      noProgressTimeoutMs: 60_000
+    });
+
+    const base = {
+      requestId: "req-np-cfg",
+      recoveryRootRequestId: "req-np-cfg",
+      latestUserMessageId: "u1",
+      recoveryKind: "continue" as const
+    };
+    const t0 = 8_000_000;
+    expect(
+      (await agentStub.beginIncidentForTest({ ...base, nowMs: t0 })).exhausted
+    ).toBe(false);
+
+    // 90s later with no progress — past the custom 1-min window (the 5-min
+    // default would NOT have sealed here), so it seals on no-progress.
+    const past = await agentStub.beginIncidentForTest({
+      ...base,
+      nowMs: t0 + 90_000
     });
     expect(past.exhausted).toBe(true);
     expect(past.reason).toBe("no_progress_timeout");

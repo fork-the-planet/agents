@@ -3837,6 +3837,13 @@ export class ThinkRecoveryTestAgent extends Think {
     this.chatRecovery = config;
   }
 
+  /** Configure recovery with a built-in `shouldKeepRecovering` predicate.
+   *  Functions can't cross the RPC boundary, so this sets the predicate in-DO
+   *  rather than accepting one through `setChatRecoveryConfigForTest`. */
+  async setShouldKeepRecoveringForTest(keepRecovering: boolean): Promise<void> {
+    this.chatRecovery = { shouldKeepRecovering: () => keepRecovering };
+  }
+
   async getChatRecoveryIncidentsForTest(): Promise<unknown[]> {
     const entries = await this.ctx.storage.list({
       prefix: "cf:chat-recovery:incident:"
@@ -4208,6 +4215,9 @@ export class ThinkRecoveryTestAgent extends Think {
     status: string;
     firstSeenAt: number;
     lastAttemptAt: number;
+    lastProgressAt?: number;
+    progress?: number;
+    workBaseline?: number;
   }): Promise<void> {
     await this.ctx.storage.put(
       `cf:chat-recovery:incident:${encodeURIComponent(incident.incidentId)}`,
