@@ -1538,6 +1538,15 @@ export class ChatRecoveryTestAgent extends AIChatAgent<Env> {
       }
     }
 
+    if (this._emitStreamError) {
+      // Surface a terminal stream error (the way a provider 500 arrives as an
+      // SSE `error` part). The turn resolves with status "error".
+      return makeSSEChunkResponse([
+        { type: "start" },
+        { type: "error", errorText: this._emitStreamError }
+      ]);
+    }
+
     const chunks: Array<Record<string, unknown>> = [];
     if (this.includeReasoningInResponse) {
       chunks.push(
@@ -1554,6 +1563,8 @@ export class ChatRecoveryTestAgent extends AIChatAgent<Env> {
     );
     return makeSSEChunkResponse(chunks);
   }
+
+  private _emitStreamError: string | null = null;
 
   setStashData(data: unknown): void {
     this._stashData = data;
@@ -1853,6 +1864,76 @@ export class ChatRecoveryTestAgent extends AIChatAgent<Env> {
         "cf:chat:recovering"
       )) ?? null
     );
+  }
+
+  /** Read the durable terminal record (#1645) so tests can assert it is
+   *  recorded on exhaustion and cleared once a later turn succeeds. */
+  async getPendingChatTerminalForTest(): Promise<{
+    requestId: string;
+    body: string;
+  } | null> {
+    return (
+      (await this.ctx.storage.get<{ requestId: string; body: string }>(
+        "cf:chat:last-terminal"
+      )) ?? null
+    );
+  }
+
+  /** Drive a successful turn purely server-side (no client request), the way
+   *  an app's own code would via `saveMessages`. Used to verify that a
+   *  succeeding programmatic turn supersedes a stale terminal record (#1645). */
+  async driveSuccessfulTurnForTest(): Promise<SaveMessagesResult["status"]> {
+    const result = await this.saveMessages([
+      {
+        id: `u-${crypto.randomUUID()}`,
+        role: "user",
+        parts: [{ type: "text", text: "hello" }]
+      }
+    ]);
+    return result.status;
+  }
+
+  /** Drive an ABORTED turn purely server-side (no client request), via a
+   *  pre-aborted external signal — the stream loop breaks immediately and the
+   *  pushed `ChatResponseResult.status` is `"aborted"`. Used to verify that an
+   *  aborted programmatic turn also supersedes a stale terminal record (#1645),
+   *  not just a completed one. */
+  async driveAbortedTurnForTest(): Promise<SaveMessagesResult["status"]> {
+    const controller = new AbortController();
+    controller.abort(new Error("pre-aborted"));
+    const result = await this.saveMessages(
+      [
+        {
+          id: `u-${crypto.randomUUID()}`,
+          role: "user",
+          parts: [{ type: "text", text: "hello" }]
+        }
+      ],
+      { signal: controller.signal }
+    );
+    return result.status;
+  }
+
+  /** Drive a turn that ends in a terminal (non-recovered) stream error — the
+   *  way a provider 500 arrives as an SSE `error` part. Used to verify the
+   *  error is durably recorded so it replays to a reconnecting client (#1645),
+   *  matching Think. Returns the resulting status (`"error"`). */
+  async driveErroredTurnForTest(
+    message: string
+  ): Promise<SaveMessagesResult["status"]> {
+    this._emitStreamError = message;
+    try {
+      const result = await this.saveMessages([
+        {
+          id: `u-${crypto.randomUUID()}`,
+          role: "user",
+          parts: [{ type: "text", text: "hello" }]
+        }
+      ]);
+      return result.status;
+    } finally {
+      this._emitStreamError = null;
+    }
   }
 
   async getIncidentForTest(incidentId: string): Promise<{

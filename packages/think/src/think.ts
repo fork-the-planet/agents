@@ -2105,6 +2105,10 @@ export class Think<
 
   private async _clearHistory(): Promise<void> {
     await this.session.clearMessages();
+    // Drop any pending terminal record (#1645) so a stale exhaustion can't
+    // replay onto a freshly-cleared (empty) conversation on reconnect. Covers
+    // both the WS `chat-clear` path and the programmatic `clearMessages()` API.
+    await this._clearChatTerminal();
   }
 
   /** Append a message while keeping Think's live message cache coherent. */
@@ -6715,7 +6719,7 @@ export class Think<
   ): Promise<void> {
     switch (event.type) {
       case "stream-resume-request":
-        this._handleStreamResumeRequest(connection);
+        await this._handleStreamResumeRequest(connection);
         break;
 
       case "stream-resume-ack":
@@ -6778,7 +6782,9 @@ export class Think<
     }
   }
 
-  private _handleStreamResumeRequest(connection: Connection): void {
+  private async _handleStreamResumeRequest(
+    connection: Connection
+  ): Promise<void> {
     if (this._resumableStream.hasActiveStream()) {
       if (
         this._continuation.activeRequestId ===
@@ -6799,6 +6805,11 @@ export class Think<
         this._continuation.pending.connectionId === connection.id)
     ) {
       this._continuation.awaitingConnections.set(connection.id, connection);
+    } else if (await this._replayTerminalOnResume(connection)) {
+      // A turn terminalized while no client was connected (#1645): drive the
+      // resume handshake so the terminal error frame can be delivered on the
+      // resumed stream (the only path that surfaces on the client) once this
+      // connection ACKs — see `_handleStreamResumeAck`.
     } else {
       sendIfOpen(connection, JSON.stringify({ type: MSG_STREAM_RESUME_NONE }));
     }
@@ -6822,6 +6833,9 @@ export class Think<
       }
     } else if (this._resumableStream.hasActiveStream()) {
       // Ignore ACKs for a different active stream request id.
+    } else if (await this._replayTerminalOnAck(connection, requestId)) {
+      // Delivered the pending terminal error frame on the resumed stream the
+      // client just ACKed (#1645).
     } else if (
       !this._resumableStream.replayCompletedChunksByRequestId(
         connection,
@@ -6896,6 +6910,15 @@ export class Think<
       this._completeSkippedRequest(connection, requestId);
       return;
     }
+
+    // A genuinely-new turn supersedes any pending terminal record (#1645) so a
+    // stale exhaustion can't replay over the resume handshake to a client that
+    // reconnects in the window between accepting this submit and the new turn
+    // streaming. Mirrors `@cloudflare/ai-chat`; without it a reconnect in that
+    // gap would surface the previous failed turn's error even though the user
+    // has already moved on. Completion clears it too, but only once the turn
+    // resolves — which leaves the gap open.
+    await this._clearChatTerminal();
 
     const releasePendingEnqueue = this._submitConcurrency.beginEnqueue();
     let pendingEnqueue = true;
@@ -8890,8 +8913,13 @@ export class Think<
     // window recovery exhausts in), and if it threw before this broadcast the
     // user would be left staring at a half-finished message with no terminal
     // resolution. The broadcast itself touches no storage, so ordering it first
-    // makes the banner resilient to a failing `_markRecoveredSubmissionInterrupted`
-    // / `_recordTerminalChatStatus`.
+    // makes the banner resilient to a failing `_recordTerminalChatStatus` /
+    // `_markRecoveredSubmissionInterrupted`.
+    //
+    // (`@cloudflare/ai-chat` persists before broadcasting instead. Ordering
+    // can't rescue a terminal-record write that itself fails, so that choice
+    // gains no reconnect reliability under storage failure while losing this
+    // banner resilience — hence Think keeps broadcast-first.)
     this._broadcastChat({
       type: MSG_CHAT_RESPONSE,
       id: incident.requestId,
@@ -8899,15 +8927,18 @@ export class Think<
       done: true,
       error: true
     });
+    // Write the durable terminal record (#1645) FIRST among the storage writes:
+    // it's the record a disconnected client replays on reconnect, so it must
+    // not be skipped if the (independent) submission-row write below throws.
+    await this._recordTerminalChatStatus(
+      "interrupted",
+      incident.requestId,
+      config.terminalMessage
+    );
     // The submission is keyed by the recovery ROOT request id; `incident.requestId`
     // is the latest per-continuation id and won't match a chained submission.
     await this._markRecoveredSubmissionInterrupted(
       incident.recoveryRootRequestId ?? incident.requestId,
-      config.terminalMessage
-    );
-    await this._recordTerminalChatStatus(
-      "interrupted",
-      incident.requestId,
       config.terminalMessage
     );
     // The exhausted record is retained for inspection and reclaimed later by
@@ -10507,11 +10538,15 @@ export class Think<
   }
 
   /**
-   * Persist (on `error`) or clear (on `completed`/`aborted`) a durable record of
-   * the last terminal turn so it can be replayed to clients on connect. A
-   * `completed`/`aborted` turn is conveyed by the persisted messages, so the
-   * record is cleared; an `error`/`interrupted` turn has no durable trace
-   * otherwise, so it is kept until a later turn resolves.
+   * Persist (on `error`/`interrupted`) or clear (on `completed`/`aborted`) the
+   * durable terminal record so it can be replayed to clients on reconnect, and
+   * resolve any in-progress "recovering…" indicator. A `completed`/`aborted`
+   * turn is conveyed by the persisted messages, so the record is cleared; an
+   * `error`/`interrupted` turn has no durable trace otherwise, so it is kept
+   * until a later turn supersedes it.
+   *
+   * The storage primitives are shared with `@cloudflare/ai-chat`
+   * (`_recordChatTerminal` / `_clearChatTerminal` / `_pendingChatTerminal`).
    */
   private async _recordTerminalChatStatus(
     status: ChatResponseResult["status"] | "interrupted",
@@ -10519,9 +10554,9 @@ export class Think<
     body: string
   ): Promise<void> {
     if (status === "error" || status === "interrupted") {
-      await this.ctx.storage.put(CHAT_LAST_TERMINAL_KEY, { requestId, body });
+      await this._recordChatTerminal(requestId, body);
     } else {
-      await this.ctx.storage.delete(CHAT_LAST_TERMINAL_KEY);
+      await this._clearChatTerminal();
     }
     // Any terminal turn outcome resolves an in-progress recovery (#1620): a
     // recovered turn that completes, errors, or is exhausted must clear the
@@ -10529,7 +10564,25 @@ export class Think<
     await this._setChatRecovering(false);
   }
 
-  private async _pendingTerminalChatResponse(): Promise<{
+  /**
+   * Persist a durable record of the last terminal turn so a client that
+   * (re)connects after the turn ended still learns its outcome (#1645). Kept
+   * until a later turn supersedes it (`_clearChatTerminal`); a single record is
+   * sufficient because only the most recent terminal is relevant.
+   */
+  private async _recordChatTerminal(
+    requestId: string,
+    body: string
+  ): Promise<void> {
+    await this.ctx.storage.put(CHAT_LAST_TERMINAL_KEY, { requestId, body });
+  }
+
+  /** Clear the durable terminal record once a later turn supersedes it (#1645). */
+  private async _clearChatTerminal(): Promise<void> {
+    await this.ctx.storage.delete(CHAT_LAST_TERMINAL_KEY);
+  }
+
+  private async _pendingChatTerminal(): Promise<{
     requestId: string;
     body: string;
   } | null> {
@@ -10538,6 +10591,52 @@ export class Think<
         CHAT_LAST_TERMINAL_KEY
       )) ?? null
     );
+  }
+
+  /**
+   * Replay a pending terminal outcome (#1645) over the resume handshake so a
+   * reconnecting client surfaces it exactly like a live exhaustion. A bare
+   * terminal frame sent on connect is dropped by the `useAgentChat` client
+   * because it never reaches a transport stream reader; only a frame delivered
+   * on a resumed stream becomes `useChat.error` (this is why the terminal is
+   * NOT included in `_buildIdleConnectMessages`). So we drive `STREAM_RESUMING`
+   * here and send the error frame once the client ACKs (see
+   * `_replayTerminalOnAck`). Returns true if a terminal was pending.
+   */
+  private async _replayTerminalOnResume(
+    connection: Connection
+  ): Promise<boolean> {
+    const pending = await this._pendingChatTerminal();
+    if (!pending) return false;
+    sendIfOpen(
+      connection,
+      JSON.stringify({ type: MSG_STREAM_RESUMING, id: pending.requestId })
+    );
+    return true;
+  }
+
+  /**
+   * Deliver the pending terminal error frame on the resumed stream the client
+   * ACKed (#1645). The record is retained (cleared only when a later turn
+   * supersedes it) so concurrent reconnects each learn the outcome.
+   */
+  private async _replayTerminalOnAck(
+    connection: Connection,
+    requestId: string
+  ): Promise<boolean> {
+    const pending = await this._pendingChatTerminal();
+    if (!pending || pending.requestId !== requestId) return false;
+    sendIfOpen(
+      connection,
+      JSON.stringify({
+        body: pending.body,
+        done: true,
+        error: true,
+        id: pending.requestId,
+        type: MSG_CHAT_RESPONSE
+      })
+    );
+    return true;
   }
 
   /**
@@ -10583,9 +10682,15 @@ export class Think<
 
   /**
    * Messages sent to a client on connect when no stream is active: the current
-   * transcript, plus a replay of the last terminal error (if any) so a turn
-   * that failed while the client was disconnected is surfaced rather than
-   * silently frozen.
+   * transcript, plus a replay of an in-progress "recovering…" status (if any).
+   *
+   * A terminal error is deliberately NOT replayed here. A bare
+   * `MSG_CHAT_RESPONSE` frame on connect is dropped by the `useAgentChat`
+   * client because it never reaches a transport stream reader, so it cannot
+   * become `useChat.error` — a failed turn would still look frozen (#1645).
+   * The terminal outcome is instead surfaced over the resume handshake
+   * (`_replayTerminalOnResume` → ACK → `_replayTerminalOnAck`), the only path
+   * that lands on the stream reader.
    */
   private async _buildIdleConnectMessages(): Promise<
     Array<Record<string, unknown>>
@@ -10593,19 +10698,11 @@ export class Think<
     const messages: Array<Record<string, unknown>> = [
       { type: MSG_CHAT_MESSAGES, messages: this.messages }
     ];
-    const pending = await this._pendingTerminalChatResponse();
-    if (pending) {
-      messages.push({
-        type: MSG_CHAT_RESPONSE,
-        id: pending.requestId,
-        body: pending.body,
-        done: true,
-        error: true
-      });
-    }
     // Replay an in-progress "recovering…" status so a client that connects
-    // mid-recovery reads the turn as working rather than frozen (#1620). It's
-    // mutually exclusive with `pending` (a terminal outcome clears recovering).
+    // mid-recovery reads the turn as working rather than frozen (#1620). This
+    // is a plain status frame the client handles on connect (unlike a terminal
+    // error, which must go through the resume handshake). It's mutually
+    // exclusive with a terminal record (any terminal outcome clears recovering).
     // Skip a stale record (older than the flag TTL) so a turn whose recovery
     // was abandoned without a terminal can't show "recovering…" forever on
     // reconnect.
