@@ -11,7 +11,7 @@ export function createCli(argv = process.argv) {
     .usage("$0 <command> [options]")
     .command(
       "init [directory]",
-      "Create a new Think app or initialize a lightly prepared npm project",
+      "Create a new Think app from a starter template",
       (cmd) =>
         cmd
           .positional("directory", {
@@ -28,9 +28,13 @@ export function createCli(argv = process.argv) {
             type: "string",
             describe: "Package and Worker name for the generated app"
           })
-          .option("route-prefix", {
+          .option("template", {
             type: "string",
-            describe: "Think route prefix for generated config"
+            describe: "Starter template to scaffold (default: basic)"
+          })
+          .option("ref", {
+            type: "string",
+            describe: "Git ref to fetch remote templates from"
           })
           .option("yes", {
             alias: "y",
@@ -53,7 +57,8 @@ export function createCli(argv = process.argv) {
           root: args.root,
           directory: args.directory,
           name: args.name,
-          routePrefix: args.routePrefix,
+          template: args.template,
+          ref: args.ref,
           yes: args.yes,
           install: args.install,
           dryRun: args.dryRun
