@@ -6,12 +6,18 @@ import {
   readdir,
   writeFile
 } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { THINK_TEMPLATES } from "create-think";
 import { createCli } from "../cli/create";
-import { initCommand } from "../cli/init";
-import { THINK_TEMPLATES } from "../cli/templates";
+import {
+  initCommand,
+  THIRD_PARTY_DEPENDENCIES,
+  THIRD_PARTY_DEV_DEPENDENCIES
+} from "../cli/init";
 import { readWranglerConfig } from "../framework/project";
 
 describe("think CLI", () => {
@@ -495,6 +501,169 @@ describe("think CLI", () => {
     expect(consoleOutput.join("\n")).toContain(
       "Edit the agent in agents/ to customize the model, prompt, tools, and skills"
     );
+  });
+
+  it("augments an existing project in place instead of fetching a template", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "think-init-"));
+    await writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        name: "existing-app",
+        dependencies: { "some-dep": "^1.0.0" }
+      }),
+      "utf8"
+    );
+
+    await initCommand({ root, install: false });
+
+    // Adds Think framework files to the current directory (no subfolder).
+    expect(await readFile(path.join(root, "vite.config.ts"), "utf8")).toContain(
+      "think()"
+    );
+    expect(await readFile(path.join(root, "wrangler.jsonc"), "utf8")).toContain(
+      "virtual:think/entry"
+    );
+    expect(
+      await readFile(path.join(root, "agents/assistant/agent.ts"), "utf8")
+    ).toContain("export class Assistant");
+    // Merges into the existing package.json, keeping the user's name and deps.
+    const pkg = JSON.parse(
+      await readFile(path.join(root, "package.json"), "utf8")
+    ) as { name: string; dependencies: Record<string, string> };
+    expect(pkg.name).toBe("existing-app");
+    expect(pkg.dependencies["some-dep"]).toBe("^1.0.0");
+    expect(pkg.dependencies["@cloudflare/think"]).toBe("latest");
+    expect(consoleOutput.join("\n")).toContain("Added Think to");
+  });
+
+  it("fetches a template even inside an existing project when --template is set", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "think-init-"));
+    await writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "existing-app" }),
+      "utf8"
+    );
+
+    await initCommand({
+      root,
+      template: "basic",
+      directory: "app",
+      install: false
+    });
+
+    // Template scaffold (not augment): a full starter app in the subfolder.
+    expect(
+      await readFile(path.join(root, "app/package.json"), "utf8")
+    ).toContain("@cloudflare/ai-chat");
+    // The existing project's package.json is left untouched.
+    const outer = JSON.parse(
+      await readFile(path.join(root, "package.json"), "utf8")
+    ) as { dependencies?: Record<string, string> };
+    expect(outer.dependencies).toBeUndefined();
+  });
+
+  it("refuses to augment a project that already has Vite config", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "think-init-"));
+    await writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "existing-app" }),
+      "utf8"
+    );
+    await writeFile(
+      path.join(root, "vite.config.ts"),
+      "export default {};\n",
+      "utf8"
+    );
+
+    await expect(initCommand({ root, install: false })).rejects.toThrow(
+      "will not migrate it automatically"
+    );
+  });
+
+  it("prints augment dry-run output without writing", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "think-init-"));
+    await writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "existing-app" }),
+      "utf8"
+    );
+
+    await initCommand({ root, dryRun: true });
+
+    expect(consoleOutput.join("\n")).toContain(
+      "Think init would add to the current project:"
+    );
+    await expect(
+      readFile(path.join(root, "vite.config.ts"), "utf8")
+    ).rejects.toThrow();
+  });
+
+  it("keeps an existing tsconfig.json when augmenting instead of aborting", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "think-init-"));
+    await writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "existing-app" }),
+      "utf8"
+    );
+    const userTsconfig = JSON.stringify({ compilerOptions: { strict: true } });
+    await writeFile(path.join(root, "tsconfig.json"), userTsconfig, "utf8");
+
+    await initCommand({ root, install: false });
+
+    // The user's tsconfig is left untouched, and Think files are still written.
+    expect(await readFile(path.join(root, "tsconfig.json"), "utf8")).toBe(
+      userTsconfig
+    );
+    expect(await readFile(path.join(root, "vite.config.ts"), "utf8")).toContain(
+      "think()"
+    );
+    expect(consoleOutput.join("\n")).toContain(
+      "Kept your existing files (not overwritten):"
+    );
+    expect(consoleOutput.join("\n")).toContain("- tsconfig.json");
+  });
+
+  it("forces type:module when augmenting a CommonJS project", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "think-init-"));
+    await writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "existing-app", type: "commonjs" }),
+      "utf8"
+    );
+
+    await initCommand({ root, install: false });
+
+    const pkg = JSON.parse(
+      await readFile(path.join(root, "package.json"), "utf8")
+    ) as { type: string };
+    expect(pkg.type).toBe("module");
+  });
+
+  it("pins augment third-party deps to the basic starter's ranges", () => {
+    // Single source of truth for tested third-party versions is the starter
+    // template. If anyone bumps the starter (or the augment generator) without
+    // updating the other, this fails so the two can't silently drift apart.
+    const starterPath = fileURLToPath(
+      new URL("../../../../think-starters/basic/package.json", import.meta.url)
+    );
+    const starter = JSON.parse(readFileSync(starterPath, "utf8")) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    const starterRanges = {
+      ...starter.dependencies,
+      ...starter.devDependencies
+    };
+
+    for (const [name, range] of Object.entries({
+      ...THIRD_PARTY_DEPENDENCIES,
+      ...THIRD_PARTY_DEV_DEPENDENCIES
+    })) {
+      expect(
+        starterRanges[name],
+        `${name} must match think-starters/basic/package.json`
+      ).toBe(range);
+    }
   });
 
   it("shows help", async () => {
