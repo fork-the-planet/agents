@@ -120,6 +120,8 @@ export { skills };
 export type { SkillRunContext, SkillSource } from "agents/skills";
 import {
   Agent,
+  callable,
+  getCurrentAgent,
   __DO_NOT_USE_WILL_BREAK__agentContext as agentContext
 } from "agents";
 
@@ -145,6 +147,7 @@ import {
   toolResultUpdate,
   crossMessageToolResultUpdate,
   toolApprovalUpdate,
+  pausedExecutionUpdate,
   parseProtocolMessage,
   applyChunkToParts,
   normalizeToolInput,
@@ -168,6 +171,7 @@ import { Session } from "agents/experimental/memory/session";
 import { truncateOlderMessages } from "agents/experimental/memory/utils";
 import { Workspace } from "@cloudflare/shell";
 import { createWorkspaceTools } from "./tools/workspace";
+import { truncatePausedExecutionOutput } from "./tools/execute";
 import { ExtensionManager, sanitizeName } from "./extensions/manager";
 import { ThinkMessengerRuntime } from "./messengers/chat-sdk";
 import type {
@@ -1771,6 +1775,15 @@ export class Think<
    * ```
    */
   workspace!: WorkspaceLike;
+
+  /**
+   * The codemode runtime behind the execute tool, when one has been created
+   * via `createExecuteRuntime(this)` / `createExecuteTool(this)` (from
+   * `@cloudflare/think/tools/execute`). Gives callables and lifecycle hooks
+   * access to approvals (`approve`/`reject`/`pending`), the audit trail
+   * (`executions`), `expirePaused`, and snippets.
+   */
+  codemode?: import("@cloudflare/codemode").CodemodeRuntimeHandle;
 
   /**
    * Include the default workspace Bash tool. Enabled by default so models can
@@ -8345,6 +8358,257 @@ export class Think<
     await this._applyToolUpdateToMessages(update);
   }
 
+  // ── Durable execution approvals (codemode HITL) ──────────────────
+  //
+  // A `requiresApproval` connector call inside the execute tool pauses the
+  // run *durably*: the tool returns `{ status: "paused", executionId,
+  // pending }` as a normal output, the model narrates what it needs, and the
+  // turn ends. These callables are the resume path: approve/reject the
+  // pending action on the codemode runtime, replace the paused output in the
+  // transcript with the new outcome, and auto-continue so the model sees it.
+
+  /**
+   * The codemode runtime handle behind the execute tool. `this.codemode` is
+   * assigned when `createExecuteRuntime(this)` / `createExecuteTool(this)`
+   * runs (normally at turn start, via `getTools()`); after a DO restart no
+   * turn may have run yet, so fall back to building the tools once.
+   */
+  private _codemodeRuntime():
+    | import("@cloudflare/codemode").CodemodeRuntimeHandle
+    | undefined {
+    if (!this.codemode) {
+      try {
+        this.getTools();
+      } catch {
+        // getTools may require turn-time context; without it there is
+        // simply no runtime to resolve.
+      }
+    }
+    return this.codemode;
+  }
+
+  /**
+   * Pending (awaiting-approval) actions across paused executions of the
+   * execute tool's codemode runtime — `{ executionId, seq, connector,
+   * method, args }` each, with FULL args (the transcript copy is truncated).
+   * Clients reconcile approval cards against this on load.
+   *
+   * Client-callable (registered below — see the `callable()` calls after the
+   * class body).
+   */
+  async pendingExecutions(
+    executionId?: string
+  ): Promise<import("@cloudflare/codemode").PendingAction[]> {
+    const runtime = this._codemodeRuntime();
+    if (!runtime) return [];
+    return runtime.pending(executionId);
+  }
+
+  /**
+   * Approve a paused execution and resume it. The run continues from where
+   * it stopped (replaying logged work, executing the approved call); the
+   * outcome — completed, errored, or paused again on the NEXT gated call —
+   * replaces the paused tool output in the transcript and the chat
+   * auto-continues so the model can act on it.
+   *
+   * Approving an execution that is no longer pending (already settled,
+   * expired, or unknown) returns `{ status: "error" }` with an explanatory
+   * message — it never throws.
+   *
+   * Client-callable.
+   */
+  async approveExecution(executionId: string): Promise<unknown> {
+    const runtime = this._codemodeRuntime();
+    if (!runtime) {
+      return {
+        status: "error",
+        executionId,
+        error:
+          "No codemode runtime is configured — the execute tool was never " +
+          "created on this agent."
+      };
+    }
+    const output = truncatePausedExecutionOutput(
+      await runtime.approve({ executionId })
+    );
+    await this._applyExecutionOutcome(executionId, output);
+    return output;
+  }
+
+  /**
+   * Reject a paused execution's pending action, ending the run. The
+   * transcript's paused output is replaced with
+   * `{ status: "rejected", executionId, reason }` and the chat
+   * auto-continues so the model can adapt (or explain) instead of erroring.
+   *
+   * Client-callable.
+   */
+  async rejectExecution(
+    executionId: string,
+    reason?: string
+  ): Promise<unknown> {
+    const runtime = this._codemodeRuntime();
+    if (!runtime) {
+      return {
+        status: "error",
+        executionId,
+        error:
+          "No codemode runtime is configured — the execute tool was never " +
+          "created on this agent."
+      };
+    }
+    const pending = await runtime.pending(executionId);
+    if (pending.length === 0) {
+      return {
+        status: "error",
+        executionId,
+        error: `Execution "${executionId}" is no longer pending.`
+      };
+    }
+    // `reject` reports whether it actually terminated the run. A `false`
+    // means the action was resolved between our `pending()` check and the
+    // reject (approve/reject interleave across facet RPC awaits — input
+    // gates only cover storage). Writing "rejected" then would clobber a
+    // paused part whose real outcome (e.g. an in-flight approval) is still
+    // coming, so surface an error instead.
+    const terminated = await runtime.reject({
+      executionId,
+      seq: pending[0].seq
+    });
+    if (!terminated) {
+      return {
+        status: "error",
+        executionId,
+        error: `Execution "${executionId}" is no longer pending — it was approved or rejected elsewhere.`
+      };
+    }
+    const output = {
+      status: "rejected",
+      executionId,
+      reason: reason ?? "Rejected by user"
+    };
+    await this._applyExecutionOutcome(executionId, output);
+    return output;
+  }
+
+  /**
+   * Replace a paused execute-tool output in the transcript with the
+   * execution's new outcome and kick the auto-continuation so the model sees
+   * it.
+   *
+   * When no paused part carries `executionId` — the output was already
+   * replaced from another tab, or compaction summarized the part away — the
+   * runtime has still durably applied the approval/rejection, so the outcome
+   * must not be dropped: it is appended as a system note instead, and the
+   * continuation still fires so the model can act on it.
+   */
+  private async _applyExecutionOutcome(
+    executionId: string,
+    output: unknown
+  ): Promise<boolean> {
+    const toolCallId = this._findPausedExecutionToolCall(executionId);
+    if (!toolCallId) {
+      // Already resolved in place (e.g. approved from another tab)? Then the
+      // transcript has the outcome and nothing more is needed.
+      if (this._findExecutionToolCall(executionId) != null) return false;
+      let summary: string;
+      try {
+        summary = JSON.stringify(output)?.slice(0, 4_000) ?? String(output);
+      } catch {
+        summary = String(output);
+      }
+      await this._appendMessageToHistory({
+        id: `exec-outcome-${executionId}-${crypto.randomUUID()}`,
+        role: "system",
+        parts: [
+          {
+            type: "text",
+            text:
+              `[execute tool] The paused execution "${executionId}" was ` +
+              `resolved, but its tool call is no longer in the transcript ` +
+              `(it may have been compacted). Outcome: ${summary}`
+          }
+        ]
+      } as UIMessage);
+    } else {
+      await this._enqueueInteractionApply(() =>
+        this._applyToolUpdateToMessages(
+          pausedExecutionUpdate(toolCallId, executionId, output)
+        )
+      );
+    }
+    // Continue on the approving connection when there is one (WS callable),
+    // else any open connection (DO-stub approval with clients attached).
+    const { connection } = getCurrentAgent();
+    let target = connection;
+    if (!target) {
+      for (const open of this.getConnections()) {
+        target = open;
+        break;
+      }
+    }
+    if (target) {
+      this._scheduleAutoContinuation(target);
+    }
+    return true;
+  }
+
+  /**
+   * Find the tool part holding the paused output of `executionId` — in the
+   * in-flight streaming accumulator first (an approval can land while a new
+   * turn streams), then the persisted transcript, newest message first.
+   */
+  private _findPausedExecutionToolCall(executionId: string): string | null {
+    return this._findExecutionToolCall(executionId, true);
+  }
+
+  /**
+   * Find the tool part carrying `executionId` in its output. With
+   * `pausedOnly`, only a still-paused output matches — used to locate the
+   * part an approval outcome should replace. Without it, any settled output
+   * matches — used to distinguish "already resolved elsewhere" from "the
+   * part is gone from the transcript" (e.g. compacted away).
+   */
+  private _findExecutionToolCall(
+    executionId: string,
+    pausedOnly = false
+  ): string | null {
+    const matches = (part: Record<string, unknown>): boolean => {
+      if (part.state !== "output-available") return false;
+      if (typeof part.toolCallId !== "string") return false;
+      const output = part.output as
+        | { status?: unknown; executionId?: unknown }
+        | null
+        | undefined;
+      return (
+        output != null &&
+        typeof output === "object" &&
+        (!pausedOnly || output.status === "paused") &&
+        output.executionId === executionId
+      );
+    };
+
+    const streaming = this._streamingAssistant;
+    if (streaming) {
+      for (const part of streaming.parts as unknown as Array<
+        Record<string, unknown>
+      >) {
+        if (matches(part)) return part.toolCallId as string;
+      }
+    }
+
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const message = this.messages[i];
+      if (message.role !== "assistant") continue;
+      for (const part of message.parts as unknown as Array<
+        Record<string, unknown>
+      >) {
+        if (matches(part)) return part.toolCallId as string;
+      }
+    }
+    return null;
+  }
+
   private async _applyToolUpdateToMessages(update: {
     toolCallId: string;
     matchStates: string[];
@@ -10941,4 +11205,16 @@ export class Think<
       exclude
     );
   }
+}
+
+// Register the HITL methods as client-callable. Imperative registration
+// (rather than `@callable()` decorator syntax on the methods) because TC39
+// decorators don't survive every consumer toolchain that compiles this file
+// from source (e.g. esbuild targeting ES2021).
+for (const method of [
+  Think.prototype.pendingExecutions,
+  Think.prototype.approveExecution,
+  Think.prototype.rejectExecution
+]) {
+  callable()(method, undefined as unknown as ClassMethodDecoratorContext);
 }
