@@ -508,6 +508,47 @@ export class ThinkTestAgent extends Think {
     return error;
   }
 
+  /**
+   * #1575: broadcast a chat error frame whose request id belongs to no
+   * agent-tool run, simulating an unrelated turn failing on this agent
+   * while a run is being tailed.
+   */
+  broadcastUnrelatedErrorForTest(requestId: string): void {
+    this.broadcast(
+      JSON.stringify({
+        type: "cf_agent_use_chat_response",
+        id: requestId,
+        error: true,
+        done: false,
+        body: "unrelated turn failure"
+      })
+    );
+  }
+
+  /**
+   * #1575: simulate a DO restart mid-run — the in-memory request-id map is
+   * empty (wiped by the restart), but the child-run row persisted its
+   * `request_id` at turn start. `_agentToolRunForRequest` must still attribute
+   * a frame to the run via the SQL fallback, and an unknown request resolves
+   * to null.
+   */
+  resolveAgentToolRunAfterRestartForTest(
+    runId: string,
+    requestId: string
+  ): { running: string | null; unknown: string | null } {
+    this["_ensureAgentToolChildRunTable"]();
+    this.sql`
+      INSERT INTO cf_agent_tool_child_runs (run_id, request_id, status, started_at)
+      VALUES (${runId}, ${requestId}, 'running', ${Date.now()})
+    `;
+    // Cold in-memory map, as after a restart.
+    this["_agentToolRunsByRequestId"].clear();
+    return {
+      running: this["_agentToolRunForRequest"](requestId),
+      unknown: this["_agentToolRunForRequest"]("no-such-request")
+    };
+  }
+
   private _beforeTurnLog: Array<{
     system: string;
     toolNames: string[];
@@ -1432,6 +1473,46 @@ export class ThinkTestAgent extends Think {
     )._streamResult(crypto.randomUUID(), createEmptyStreamResult());
   }
 
+  /**
+   * #1575: drive `_replayTerminalOnAck` end to end — produce a real errored
+   * stream that buffered partial content, then replay the pending terminal
+   * onto a capturing connection. Returns the frames a reconnecting client
+   * would observe, in order, so the test can assert the partial content is
+   * replayed before the terminal error frame.
+   */
+  async replayTerminalOnAckCaptureForTest(errorText: string): Promise<{
+    returned: boolean;
+    frames: Array<Record<string, unknown>>;
+  }> {
+    const requestId = crypto.randomUUID();
+    await (
+      this as unknown as {
+        _streamResult: (
+          requestId: string,
+          result: StreamableResult
+        ) => Promise<void>;
+      }
+    )._streamResult(
+      requestId,
+      createInBandErrorStreamResult(errorText, ["partial response"])
+    );
+    const frames: Array<Record<string, unknown>> = [];
+    const fakeConnection = {
+      send(message: string) {
+        frames.push(JSON.parse(message) as Record<string, unknown>);
+      }
+    };
+    const returned = await (
+      this as unknown as {
+        _replayTerminalOnAck: (
+          connection: { send(message: string): void },
+          requestId: string
+        ) => Promise<boolean>;
+      }
+    )._replayTerminalOnAck(fakeConnection, requestId);
+    return { returned, frames };
+  }
+
   async runEmptyRpcStreamForTest(): Promise<{ doneCalled: boolean }> {
     let doneCalled = false;
     await (
@@ -1843,6 +1924,73 @@ export class ThinkAgentToolParent extends Agent {
       input,
       inputPreview: input
     });
+  }
+
+  /**
+   * #1575: run a Think child while injecting a chat error frame from an
+   * UNRELATED turn (a request id that belongs to no agent-tool run) into the
+   * child's broadcast stream mid-run. The run's terminal status must not be
+   * contaminated by it.
+   */
+  async runThinkChildWithInjectedUnrelatedError(
+    input: string,
+    injectAfterMs: number,
+    runId = crypto.randomUUID()
+  ): Promise<RunAgentToolResult> {
+    this.events = [];
+    this.finishes = [];
+    const child = await this.subAgent(ThinkTestAgent, runId);
+    const timer = setTimeout(() => {
+      void child.broadcastUnrelatedErrorForTest(`unrelated-turn-${runId}`);
+    }, injectAfterMs);
+    try {
+      return await this.runAgentTool(ThinkTestAgent, {
+        runId,
+        parentToolCallId: "think-tool-call",
+        input,
+        inputPreview: input
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * #1575: run a Think child whose turn dies with an in-band stream error.
+   * Used to assert error classification independent of tailer timing and that
+   * concurrent runs stay isolated.
+   */
+  async runThinkChildWithInBandError(
+    input: string,
+    errorText: string,
+    runId = crypto.randomUUID()
+  ): Promise<RunAgentToolResult> {
+    this.events = [];
+    this.finishes = [];
+    const child = await this.subAgent(ThinkTestAgent, runId);
+    await child.setInBandErrorResponse(errorText);
+    return this.runAgentTool(ThinkTestAgent, {
+      runId,
+      parentToolCallId: "think-tool-call",
+      input,
+      inputPreview: input
+    });
+  }
+
+  /**
+   * #1575: start a Think child run directly — no tailer is ever attached —
+   * with a turn that dies in-band, and wait for its terminal inspection.
+   * Terminal status must come from the child's own result, not from tailing.
+   */
+  async startThinkChildWithoutTailForTest(
+    input: string,
+    errorText: string,
+    runId = crypto.randomUUID()
+  ): Promise<AgentToolRunInspection> {
+    const child = await this.subAgent(ThinkTestAgent, runId);
+    await child.setInBandErrorResponse(errorText);
+    await child.startAgentToolRun(input, { runId });
+    return this.waitForTerminalInspectionForTest(child, runId);
   }
 
   /**

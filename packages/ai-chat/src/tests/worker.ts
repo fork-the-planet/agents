@@ -884,6 +884,8 @@ export class SlowStreamAgent extends AIChatAgent<Env> {
           chunkCount?: number;
           chunkDelayMs?: number;
           streamError?: string;
+          /** Emit this many text-delta chunks before the in-band error (#1575). */
+          errorAfterChunks?: number;
           throwError?: boolean;
         }
       | undefined;
@@ -893,6 +895,7 @@ export class SlowStreamAgent extends AIChatAgent<Env> {
     const chunkCount = body?.chunkCount ?? 20;
     const chunkDelayMs = body?.chunkDelayMs ?? 50;
     const streamError = body?.streamError;
+    const errorAfterChunks = body?.errorAfterChunks ?? 0;
     const throwError = body?.throwError ?? false;
     const abortSignal = useAbortSignal ? options?.abortSignal : undefined;
 
@@ -904,6 +907,27 @@ export class SlowStreamAgent extends AIChatAgent<Env> {
     const stream = new ReadableStream({
       async pull(controller) {
         if (format === "sse" && streamError) {
+          // Optionally stream real content first so the in-band error
+          // arrives mid-message — the #1575 partial-content scenario.
+          if (errorAfterChunks > 0) {
+            controller.enqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ type: "text-start", id: "t-err" })}\n\n`
+              )
+            );
+            for (let i = 0; i < errorAfterChunks; i++) {
+              await new Promise((r) => setTimeout(r, chunkDelayMs));
+              controller.enqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({
+                    type: "text-delta",
+                    id: "t-err",
+                    delta: `partial-${i} `
+                  })}\n\n`
+                )
+              );
+            }
+          }
           const chunk = JSON.stringify({
             type: "error",
             errorText: streamError
@@ -1179,6 +1203,36 @@ export class SlowStreamAgent extends AIChatAgent<Env> {
 
   getChatResponseResults(): ChatResponseResult[] {
     return [...this._chatResponseResults];
+  }
+
+  /**
+   * #1575: drive `ResumableStream.replayErroredChunksByRequestId` against a
+   * controllable connection so the return-value contract is testable in
+   * isolation: `failAfter` sends succeed, then the connection simulates a
+   * post-close send (the only error `sendIfOpen` swallows). Returns the
+   * method's boolean and how many frames actually went out.
+   */
+  replayErroredChunksByRequestIdForTest(
+    requestId: string,
+    failAfter: number
+  ): { returned: boolean; sent: number } {
+    let sent = 0;
+    const fakeConnection = {
+      send(_message: string) {
+        if (sent >= failAfter) {
+          throw new TypeError("WebSocket send() after close");
+        }
+        sent++;
+      }
+    };
+    const rs = this["_resumableStream"];
+    const returned = rs.replayErroredChunksByRequestId(
+      fakeConnection as unknown as Parameters<
+        typeof rs.replayErroredChunksByRequestId
+      >[0],
+      requestId
+    );
+    return { returned, sent };
   }
 
   async persistToolCallMessage(
@@ -2688,6 +2742,58 @@ export class AIChatAgentToolChild extends AIChatAgent<Env> {
     return this.messages;
   }
 
+  /**
+   * #1575: broadcast a chat error frame whose request id belongs to no
+   * agent-tool run, simulating an unrelated turn failing on this agent
+   * while a run is being tailed.
+   */
+  broadcastUnrelatedErrorForTest(requestId: string): void {
+    this.broadcast(
+      JSON.stringify({
+        type: MessageType.CF_AGENT_USE_CHAT_RESPONSE,
+        id: requestId,
+        error: true,
+        done: false,
+        body: "unrelated turn failure"
+      })
+    );
+  }
+
+  /**
+   * #1575: number of live request-id → run-id cache entries. Used to assert
+   * the negative cache (null entries for unrelated turns) does not leak past
+   * a run's lifetime.
+   */
+  agentToolRunsByRequestIdSizeForTest(): number {
+    // Bracket access: the field is private on the base AIChatAgent, and this
+    // test-only subclass deliberately peeks at it without widening the
+    // published API.
+    return this["_agentToolRunsByRequestId"].size;
+  }
+
+  /**
+   * #1575: simulate a DO restart mid-run — the in-memory request-id map is
+   * empty (wiped by the restart), but the run row persisted its `request_id`
+   * at turn start. `_agentToolRunForRequest` must still attribute a frame to
+   * the run via the SQL fallback, and an unknown request resolves to null.
+   */
+  resolveAgentToolRunAfterRestartForTest(
+    runId: string,
+    requestId: string
+  ): { running: string | null; unknown: string | null } {
+    this.sql`
+      insert into cf_ai_chat_agent_tool_runs
+        (run_id, request_id, status, input_json, started_at)
+      values (${runId}, ${requestId}, 'running', '{}', ${Date.now()})
+    `;
+    // Cold in-memory map, as after a restart.
+    this["_agentToolRunsByRequestId"].clear();
+    return {
+      running: this["_agentToolRunForRequest"](requestId),
+      unknown: this["_agentToolRunForRequest"]("no-such-request")
+    };
+  }
+
   private _readChildRunStatusForTest(runId: string): string | null {
     const rows = this.sql<{ status: string }>`
       SELECT status FROM cf_ai_chat_agent_tool_runs WHERE run_id = ${runId}
@@ -2901,6 +3007,70 @@ export class AIChatAgentToolParent extends Agent<Env> {
 
   getFinishesForTest(): AgentToolFinishForTest[] {
     return this.finishes;
+  }
+
+  /**
+   * #1575: run a child while injecting a chat error frame from an UNRELATED
+   * turn (a request id that belongs to no agent-tool run) into the child's
+   * broadcast stream mid-run. The run's terminal status must not be
+   * contaminated by it.
+   */
+  async runChildWithInjectedUnrelatedError(
+    input: AgentToolInput,
+    injectAfterMs: number,
+    runId = crypto.randomUUID()
+  ): Promise<RunAgentToolResult> {
+    this.events = [];
+    this.finishes = [];
+    const child = await this.subAgent(AIChatAgentToolChild, runId);
+    const timer = setTimeout(() => {
+      void child.broadcastUnrelatedErrorForTest(`unrelated-turn-${runId}`);
+    }, injectAfterMs);
+    try {
+      return await this.runAgentTool(AIChatAgentToolChild, {
+        runId,
+        parentToolCallId: "test-tool-call",
+        input,
+        inputPreview: input.prompt
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * #1575: read the child's live request-id cache size after a run, to assert
+   * negatively-cached entries for unrelated turns were swept on completion.
+   */
+  async childAgentToolRunsMapSizeForTest(runId: string): Promise<number> {
+    const child = await this.subAgent(AIChatAgentToolChild, runId);
+    return child.agentToolRunsByRequestIdSizeForTest();
+  }
+
+  /**
+   * #1575: resolve a run via the child's request-id SQL fallback after the
+   * in-memory map is cleared (post-restart attribution).
+   */
+  async childResolveAfterRestartForTest(
+    runId: string,
+    requestId: string
+  ): Promise<{ running: string | null; unknown: string | null }> {
+    const child = await this.subAgent(AIChatAgentToolChild, runId);
+    return child.resolveAgentToolRunAfterRestartForTest(runId, requestId);
+  }
+
+  /**
+   * #1575: start a child run directly — no tailer/forwarder is ever
+   * attached — and wait for its terminal inspection. Terminal status must
+   * come from the child turn's own result, not from tailing side effects.
+   */
+  async startChildWithoutTailForTest(
+    input: AgentToolInput,
+    runId = crypto.randomUUID()
+  ): Promise<AgentToolRunInspection> {
+    const child = await this.subAgent(AIChatAgentToolChild, runId);
+    await child.startAgentToolRun(input, { runId });
+    return this.waitForTerminalInspectionForTest(child, runId);
   }
 
   private insertRecoverableParentRunForTest(
