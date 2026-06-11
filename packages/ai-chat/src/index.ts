@@ -4699,9 +4699,10 @@ export class AIChatAgent<
    * Exactly-once terminalization here rests SOLELY on the
    * `stored?.status === "exhausted"` re-entry guard below — unlike
    * `@cloudflare/think`, `@cloudflare/ai-chat` has no durable-submission layer
-   * to short-circuit a duplicate alarm earlier. The sealed incident is
-   * re-persisted even when the record was found missing, so a swept record is
-   * re-armed for the guard on the next alarm.
+   * to short-circuit a duplicate alarm earlier. The incident read/write are
+   * best-effort because they back only that guard, not the terminal UX: a
+   * failed read synthesizes the incident and a failed seal write costs at most
+   * a re-delivered banner on a duplicate alarm.
    *
    * Two residual at-least-once edges, both deliberately accepted as "deliver a
    * second banner" ≫ "silently drop the turn":
@@ -4720,9 +4721,19 @@ export class AIChatAgent<
     const incidentKey = data?.incidentId
       ? this._chatRecoveryIncidentKey(data.incidentId)
       : null;
-    const stored = incidentKey
-      ? await this.ctx.storage.get<ChatRecoveryIncident>(incidentKey)
-      : null;
+    let stored: ChatRecoveryIncident | null = null;
+    if (incidentKey) {
+      try {
+        stored =
+          (await this.ctx.storage.get<ChatRecoveryIncident>(incidentKey)) ??
+          null;
+      } catch (readError) {
+        console.error(
+          "[AIChatAgent] failed to read recovery incident during give-up; synthesizing",
+          readError
+        );
+      }
+    }
 
     // Re-entry guard (see method doc): a sealed incident means terminalization
     // already happened, so a duplicate stale alarm must not re-fire
@@ -4758,12 +4769,6 @@ export class AIChatAgent<
           reason: "stable_timeout"
         };
 
-    // Persist the sealed incident (retained for inspection / TTL sweep) so the
-    // re-entry guard above sees `exhausted` if a duplicate stale alarm fires.
-    if (incidentKey) {
-      await this.ctx.storage.put(incidentKey, incident);
-    }
-
     const streamId = this._resolveRecoveryStreamId(
       incident.recoveryRootRequestId ?? incident.requestId
     );
@@ -4771,6 +4776,17 @@ export class AIChatAgent<
       ? this._getPartialStreamText(streamId)
       : { text: "", parts: [] as MessagePart[] };
 
+    // Terminalize BEFORE sealing the incident. The terminal write inside
+    // `_exhaustChatRecovery` (`_recordChatTerminal`) hits storage and can
+    // reject with a platform transient in exactly the window a give-up tends
+    // to run in (#1730: deploy reset / storage outage). Letting that throw
+    // propagate is deliberate: `Agent._executeScheduleCallback` defers the
+    // one-shot row on a platform transient, so the WHOLE give-up re-runs on a
+    // healthy isolate instead of half-sealing. Sealing first would arm the
+    // re-entry guard above and turn that re-run into a no-op — dropping the
+    // durable terminal record (#1645). The re-run is idempotent
+    // (`_recordChatTerminal` overwrites the same key); `onExhausted` + the
+    // banner may fire again — the documented at-least-once edge.
     await this._exhaustChatRecovery(
       incident,
       config,
@@ -4778,6 +4794,21 @@ export class AIChatAgent<
       streamId,
       incident.firstSeenAt
     );
+
+    // Persist the sealed incident (retained for inspection / TTL sweep) so the
+    // re-entry guard above sees `exhausted` if a duplicate stale alarm fires.
+    // Best-effort: terminalization already fully succeeded, so a failed seal
+    // write costs at most a re-delivered banner on a duplicate alarm.
+    if (incidentKey) {
+      try {
+        await this.ctx.storage.put(incidentKey, incident);
+      } catch (writeError) {
+        console.error(
+          "[AIChatAgent] failed to persist sealed recovery incident during give-up",
+          writeError
+        );
+      }
+    }
   }
 
   private _shouldRetryRecoveredPreStreamTurn(
