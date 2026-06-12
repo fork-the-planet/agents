@@ -26,19 +26,12 @@ allowBuilds:
 minimumReleaseAgeExclude:
   - "@cloudflare/*"
   - "@typescript/*"
-  - "@ai-sdk/anthropic@3.0.82"
-  - "@ai-sdk/gateway@3.0.127"
-  - "@ai-sdk/openai@3.0.69"
-  - "@ai-sdk/react@3.0.201"
   - "@astrojs/cloudflare@13.7.0"
   - "@elevenlabs/elevenlabs-js@2.52.0"
-  - ai@6.0.199
   - astro@6.4.5
   - autoevals@0.3.0
   - hono@4.12.25
-  - miniflare@4.20260609.0
   - workerd@1.20260609.1
-  - wrangler@4.99.0
   - "@ai-sdk/anthropic@3.0.83"
   - "@ai-sdk/gateway@3.0.128"
   - "@ai-sdk/google@3.0.81"
