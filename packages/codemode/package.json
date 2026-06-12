@@ -12,13 +12,13 @@
   },
   "dependencies": {
     "@types/json-schema": "^7.0.15",
-    "acorn": "^8.16.0"
+    "acorn": "^8.17.0"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
     "@playwright/test": "^1.60.0",
     "@tanstack/ai": "^0.28.0",
-    "ai": "^6.0.199",
+    "ai": "^6.0.202",
     "vitest": "4.1.8",
     "zod": "^4.4.3"
   },

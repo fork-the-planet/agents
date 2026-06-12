@@ -19,15 +19,15 @@
     "react-router": "^7.17.0"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.40.1",
-    "@cloudflare/workers-types": "^4.20260609.1",
+    "@cloudflare/vite-plugin": "^1.40.2",
+    "@cloudflare/workers-types": "^4.20260612.1",
     "@react-router/dev": "^7.17.0",
-    "@types/node": "^25.9.2",
+    "@types/node": "^25.9.3",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "typescript": "^6.0.3",
     "vite": "^8.0.16",
     "vitest": "4.1.8",
-    "wrangler": "^4.99.0"
+    "wrangler": "^4.100.0"
   }
 }
