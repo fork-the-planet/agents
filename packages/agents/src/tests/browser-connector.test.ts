@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { BrowserConnector } from "../browser/connector";
+import { getBrowserRecording } from "../browser/browser-run";
 import type {
   BrowserSessionLock,
   BrowserSessionStore,
@@ -126,6 +127,8 @@ interface BrowserRequest {
 function createFakeBrowser(options?: {
   listStatuses?: number[];
   cdpErrors?: Set<string>;
+  /** Include a `devtoolsFrontendUrl` (the Live View link) on listed targets. */
+  liveTargets?: boolean;
 }) {
   const requests: BrowserRequest[] = [];
   const sockets: FakeCdpSocket[] = [];
@@ -172,7 +175,20 @@ function createFakeBrowser(options?: {
       if (url.endsWith("/json/list")) {
         const status = listStatuses.shift();
         if (status) return new Response(null, { status });
-        return Response.json([{ id: "target-1", type: "page" }]);
+        const sessionId =
+          url.match(/\/browser\/(session-[^/?]+)/)?.[1] ?? "session";
+        return Response.json([
+          {
+            id: "target-1",
+            type: "page",
+            ...(options?.liveTargets
+              ? {
+                  url: "https://example.com/",
+                  devtoolsFrontendUrl: `https://live.browser.run/ui/inspector?wss=live.browser.run/api/devtools/browser/${sessionId}/page/target-1?jwt=token`
+                }
+              : {})
+          }
+        ]);
       }
 
       if (method === "DELETE") {
@@ -226,11 +242,15 @@ describe("BrowserConnector", () => {
       "attachToTarget",
       "clearDebugLog",
       "getDebugLog",
+      "getLiveViewUrl",
       "send",
       "spec"
     ]);
     expect(oneShotDesc.annotations?.spec).toEqual({ replay: "reexecute" });
     expect(oneShotDesc.annotations?.getDebugLog).toEqual({
+      replay: "reexecute"
+    });
+    expect(oneShotDesc.annotations?.getLiveViewUrl).toEqual({
       replay: "reexecute"
     });
     expect(oneShotDesc.annotations?.send).toBeUndefined();
@@ -778,5 +798,197 @@ describe("BrowserConnector", () => {
     await connector.closeSession();
     expect(store.sessions.has("cdp:reuse:default")).toBe(false);
     expect(deletesFor(requests, "session-1")).toHaveLength(1);
+  });
+
+  it("builds a Live View URL for the current execution's tab", async () => {
+    const { browser } = createFakeBrowser({ liveTargets: true });
+    const store = new MemorySessionStore();
+    const connector = new BrowserConnector(fakeCtx, { browser, store });
+
+    const result = (await connector.executeTool(
+      "getLiveViewUrl",
+      {},
+      { executionId: "exec-a" }
+    )) as { url: string; targetId: string; expiresInMs: number };
+
+    expect(result.targetId).toBe("target-1");
+    expect(result.url).toContain("live.browser.run");
+    expect(result.url).toContain("session-1");
+    expect(result.expiresInMs).toBeGreaterThan(0);
+  });
+
+  it("rewrites the Live View mode query param when asked", async () => {
+    const { browser } = createFakeBrowser({ liveTargets: true });
+    const store = new MemorySessionStore();
+    const connector = new BrowserConnector(fakeCtx, { browser, store });
+
+    const result = (await connector.executeTool(
+      "getLiveViewUrl",
+      { mode: "devtools" },
+      { executionId: "exec-a" }
+    )) as { url: string };
+
+    expect(new URL(result.url).searchParams.get("mode")).toBe("devtools");
+  });
+
+  it("errors clearly when the requested Live View target is missing", async () => {
+    const { browser } = createFakeBrowser({ liveTargets: true });
+    const store = new MemorySessionStore();
+    const connector = new BrowserConnector(fakeCtx, { browser, store });
+
+    await expect(
+      connector.executeTool(
+        "getLiveViewUrl",
+        { targetId: "nope" },
+        { executionId: "exec-a" }
+      )
+    ).rejects.toThrow("No target nope found");
+  });
+
+  it("exposes shared-session Live View URLs via the host helper", async () => {
+    const { browser } = createFakeBrowser({ liveTargets: true });
+    const store = new MemorySessionStore();
+    const connector = new BrowserConnector(fakeCtx, {
+      browser,
+      store,
+      session: { mode: "reuse" }
+    });
+
+    expect(await connector.liveView()).toBeUndefined();
+
+    await connector.executeTool(
+      "send",
+      { method: "Browser.getVersion" },
+      { executionId: "exec-a" }
+    );
+
+    const view = await connector.liveView({ mode: "tab" });
+    expect(view?.sessionId).toBe("session-1");
+    expect(view?.targets).toHaveLength(1);
+    expect(view?.targets[0].targetId).toBe("target-1");
+    expect(view?.targets[0].pageUrl).toBe("https://example.com/");
+    expect(new URL(view!.targets[0].url).searchParams.get("mode")).toBe("tab");
+  });
+
+  it("enables session recording on the create request when opted in", async () => {
+    const { browser, requests } = createFakeBrowser();
+    const store = new MemorySessionStore();
+    const connector = new BrowserConnector(fakeCtx, {
+      browser,
+      store,
+      session: { mode: "reuse", recording: true }
+    });
+
+    await connector.executeTool(
+      "send",
+      { method: "Browser.getVersion" },
+      { executionId: "exec-a" }
+    );
+
+    const create = requests.find((request) => request.method === "POST");
+    expect(create).toBeDefined();
+    expect(new URL(create!.url).searchParams.get("recording")).toBe("true");
+  });
+
+  it("enables session recording on one-shot (default mode) creates too", async () => {
+    const { browser, requests } = createFakeBrowser();
+    const store = new MemorySessionStore();
+    const connector = new BrowserConnector(fakeCtx, {
+      browser,
+      store,
+      session: { recording: true }
+    });
+
+    await connector.executeTool(
+      "send",
+      { method: "Browser.getVersion" },
+      { executionId: "exec-a" }
+    );
+
+    const create = requests.find((request) => request.method === "POST");
+    expect(create).toBeDefined();
+    expect(new URL(create!.url).searchParams.get("recording")).toBe("true");
+  });
+
+  it("omits the recording param when not opted in", async () => {
+    const { browser, requests } = createFakeBrowser();
+    const store = new MemorySessionStore();
+    const connector = new BrowserConnector(fakeCtx, {
+      browser,
+      store,
+      session: { mode: "reuse" }
+    });
+
+    await connector.executeTool(
+      "send",
+      { method: "Browser.getVersion" },
+      { executionId: "exec-a" }
+    );
+
+    const create = requests.find((request) => request.method === "POST");
+    expect(create).toBeDefined();
+    expect(new URL(create!.url).searchParams.has("recording")).toBe(false);
+  });
+});
+
+describe("getBrowserRecording", () => {
+  it("fetches the recording from the REST API with bearer auth", async () => {
+    let seenUrl = "";
+    let seenAuth: string | null = null;
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      seenUrl = String(input);
+      seenAuth = new Headers(init?.headers).get("Authorization");
+      return Response.json({
+        sessionId: "sess-1",
+        duration: 4380,
+        events: { "target-1": [{ type: 4 }], "target-2": [] }
+      });
+    }) as typeof fetch;
+
+    const recording = await getBrowserRecording({
+      accountId: "acct-123",
+      apiToken: "tok-abc",
+      sessionId: "sess-1",
+      fetchImpl
+    });
+
+    expect(seenUrl).toBe(
+      "https://api.cloudflare.com/client/v4/accounts/acct-123/browser-rendering/recording/sess-1"
+    );
+    expect(seenAuth).toBe("Bearer tok-abc");
+    expect(recording.duration).toBe(4380);
+    expect(Object.keys(recording.events)).toEqual(["target-1", "target-2"]);
+  });
+
+  it("unwraps a v4 result envelope when present", async () => {
+    const fetchImpl = (async () =>
+      Response.json({
+        success: true,
+        result: { sessionId: "sess-2", duration: 10, events: {} }
+      })) as typeof fetch;
+
+    const recording = await getBrowserRecording({
+      accountId: "a",
+      apiToken: "t",
+      sessionId: "sess-2",
+      fetchImpl
+    });
+
+    expect(recording.sessionId).toBe("sess-2");
+    expect(recording.duration).toBe(10);
+  });
+
+  it("throws a BrowserRenderingError on a non-ok response", async () => {
+    const fetchImpl = (async () =>
+      new Response("not found", { status: 404 })) as typeof fetch;
+
+    await expect(
+      getBrowserRecording({
+        accountId: "a",
+        apiToken: "t",
+        sessionId: "missing",
+        fetchImpl
+      })
+    ).rejects.toThrow(/404/);
   });
 });

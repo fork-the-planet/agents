@@ -199,10 +199,148 @@ const { runtime, connector, tools } = createBrowserRuntime({
 });
 
 await connector.sessionInfo(); // shared session id + open targets
+await connector.liveView(); // Live View URLs for the shared session's tabs
 await connector.closeSession(); // close the shared session
 await connector.sweep(); // reclaim expired/stale sessions — call from a scheduled task
 await runtime.expirePaused(); // reject stale never-approved pauses, freeing their sessions
 ```
+
+## Quick Actions (stateless browsing)
+
+`browser_execute` drives a full, stateful CDP session — the right tool for interactive, multi-step automation. But a lot of agent browsing is really one-shot: _read this page as Markdown_, _extract these fields_, _list the links_. For those, [Quick Actions](https://developers.cloudflare.com/browser-run/quick-actions/) are simpler, faster, and cheaper. They need only the `browser` binding — no Durable Object, Worker Loader, or sandbox — so they work from any Worker.
+
+```ts
+import { createQuickActionTools } from "agents/browser/ai";
+
+const tools = createQuickActionTools({ browser: this.env.BROWSER });
+// browser_markdown, browser_extract, browser_links, browser_scrape
+const result = await generateText({ model, tools, messages });
+```
+
+By default you get the text-returning, model-friendly tools; `browser_content` (raw HTML) is opt-in via `actions`.
+
+**Context safety.** Every result is bounded to roughly `maxChars` (default 50000) so a single browse cannot blow the context window, while preserving each result's shape so the model sees a consistent type: text (markdown/content) is truncated to a string, oversized link/scrape arrays are trimmed but stay arrays, and only an opaque oversized object (e.g. a sprawling `extract`) degrades to a `{ truncated, note, preview }` summary. Set `maxChars: 0` to disable.
+
+**Authenticated and JavaScript-heavy pages.** The model only ever supplies the page (`url`/`html`) and action-specific fields. Host-supplied options — `cookies`, `authenticate`, `setExtraHTTPHeaders` for protected pages, or `gotoOptions` / `viewport` for pages that need to settle — are passed once via `options` and merged into every request:
+
+```ts
+const tools = createQuickActionTools({
+  browser: this.env.BROWSER,
+  actions: ["markdown", "extract", "links"],
+  maxChars: 20_000,
+  options: {
+    authenticate: { username: "user", password: env.SITE_PASSWORD },
+    gotoOptions: { waitUntil: "networkidle0" }
+  }
+});
+```
+
+You can also call the primitives directly:
+
+```ts
+import { browserMarkdown, browserExtract } from "agents/browser";
+
+const md = await browserMarkdown(this.env.BROWSER, { url });
+const data = await browserExtract<{ price: number }>(this.env.BROWSER, {
+  url,
+  prompt: "the product price",
+  response_format: { type: "json_schema", schema: priceSchema }
+});
+```
+
+For an endpoint or option not yet wrapped, `runQuickAction(browser, action, params)` returns the raw `Response`; its `params` are typed against the action (`"json"` expects an extract input, `"scrape"` expects `elements`, and so on).
+
+**Using them with `browser_execute`.** Quick Actions and the durable CDP tool share the same `BROWSER` binding and complement each other — one-shot reads versus interactive sessions. `createBrowserTools` / `createBrowserRuntime` expose **both by default** whenever a `browser` binding is present, and resolve `ctx` from the current Agent (via `getCurrentAgent()`) so you can skip threading `this.ctx`:
+
+```ts
+// Inside an Agent method — ctx is picked up automatically:
+const tools = createBrowserTools({
+  browser: this.env.BROWSER,
+  loader: this.env.LOADER
+});
+// browser_execute + browser_markdown + browser_extract + browser_links + browser_scrape
+
+// Configure or disable the Quick Action half:
+createBrowserTools({ browser, loader, quickActions: { maxChars: 20_000 } });
+createBrowserTools({ browser, loader, quickActions: false });
+```
+
+When only `cdpUrl` is set (no binding), the Quick Action tools are skipped silently.
+
+**Using them with `@cloudflare/think`.** Quick Action tools are an ordinary `ToolSet`, so a Think agent exposes them by spreading them from `getTools()`:
+
+```ts
+class Researcher extends Think<Env> {
+  getTools() {
+    return { ...createQuickActionTools({ browser: this.env.BROWSER }) };
+  }
+}
+```
+
+Quick Actions require a Worker `compatibility_date` of `2026-03-24` or later and `remote: true` on the browser binding for local `wrangler dev`.
+
+## Live View and human-in-the-loop
+
+[Live View](https://developers.cloudflare.com/browser-run/features/live-view/) lets a human open a URL and watch — or take control of — a running browser session in real time. It is the building block for human-in-the-loop steps such as logging in, solving a CAPTCHA, completing MFA, or entering data you do not want to pass through an automation script.
+
+Because the codemode runtime can already pause a run for approval _with the browser session intact_, a handoff is a four-step pattern:
+
+1. The model calls `cdp.getLiveViewUrl()` to get a link to the current tab.
+2. It surfaces the link to the user (for example by returning it, writing it to state, or sending it via Slack or email).
+3. It makes an approval-gated call, so the run pauses durably while the human acts in the live browser.
+4. After approval, the run resumes against the same session — cookies and login state intact.
+
+```javascript
+async () => {
+  const { targetId } = await cdp.send({
+    method: "Target.createTarget",
+    params: { url: "https://example.com/login" }
+  });
+
+  // A link the user opens to log in themselves.
+  const { url } = await cdp.getLiveViewUrl({ targetId, mode: "tab" });
+  return { needsHumanLogin: url };
+};
+```
+
+Pass `mode: "tab"` for a standalone interactive page view (best for a handoff) or `mode: "devtools"` for the full DevTools inspector panel. The URL is valid for about five minutes; call again for a fresh one.
+
+From the host side, `connector.liveView()` returns the shared (`reuse`/`dynamic`) session's tabs and their Live View URLs, so an agent can render a "take over this session" link in its own UI without entering the sandbox. Each tab also carries its current `pageUrl`, so a UI can label tabs and skip blank or internal (`about:blank`, `chrome://`) pages.
+
+## Session recording
+
+Where Live View lets you watch a session _live_, [session recording](https://developers.cloudflare.com/browser-run/features/session-recording/) captures everything the agent did so you can review it _afterward_ — an [rrweb](https://github.com/rrweb-io/rrweb) capture of DOM changes, input, and navigation (structured JSON, not video). It is the natural audit trail for an autonomous browser run.
+
+Opt in per session via the `session` option; sessions this connector creates then record until they close:
+
+```ts
+const { connector, tools } = createBrowserRuntime({
+  ctx: this.ctx,
+  browser: this.env.BROWSER,
+  loader: this.env.LOADER,
+  session: { mode: "reuse", key: "main", recording: true }
+});
+```
+
+A recording is only finalized once the session closes (an explicit `connector.closeSession()`, idle `keep_alive` expiry, or `connector.sweep()`), so capture the session id while the session is alive and fetch the recording later:
+
+```ts
+import { getBrowserRecording } from "agents/browser";
+
+const { sessionId } = (await connector.sessionInfo()) ?? {};
+// ...later, after the session has closed...
+const recording = await getBrowserRecording({
+  accountId: this.env.CF_ACCOUNT_ID,
+  apiToken: this.env.CF_API_TOKEN,
+  sessionId
+});
+// recording.events is keyed by CDP target (one rrweb event array per tab),
+// ready to hand to rrweb-player.
+```
+
+Retrieval goes through the Browser Rendering REST API, so it needs an account id and an API token with `Browser Rendering` read access (the Workers binding cannot read recordings). Recordings are retained for 30 days and capped at 2 hours per session.
+
+Be deliberate with recording on shared (`reuse`/`dynamic`) sessions: the recording spans the session's _entire_ lifetime — every turn, and every user that shares the session `key` — until it closes. rrweb masks input fields by default, but treat a recording as potentially sensitive and scope the session `key` accordingly.
 
 ## Execution model
 
@@ -222,6 +360,7 @@ Inside `browser_execute`, the `cdp` namespace provides (all methods take one obj
 | `cdp.spec()`                                            | The searchable, normalized CDP protocol spec                                   |
 | `cdp.getDebugLog({ limit? })`                           | Recent CDP traffic (sends, receives, warnings) for this execution's connection |
 | `cdp.clearDebugLog()`                                   | Clear the debug log buffer                                                     |
+| `cdp.getLiveViewUrl({ targetId?, mode? })`              | A Live View URL a human can open to watch/control the session in real time     |
 | `cdp.startSession()` _(reuse/dynamic)_                  | Promote/ensure the shared session; returns its info                            |
 | `cdp.sessionInfo()` _(reuse/dynamic)_                   | Shared session info, or `null`                                                 |
 | `cdp.closeSession()` _(reuse/dynamic)_                  | Close the shared session                                                       |

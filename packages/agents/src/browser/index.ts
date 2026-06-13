@@ -10,9 +10,11 @@ export {
   connectBrowserSession,
   createBrowserSession,
   deleteBrowserSession,
+  getBrowserRecording,
   listBrowserTargets,
   BrowserRenderingError,
   type BrowserBinding,
+  type BrowserRecording,
   type BrowserSessionInfo,
   type BrowserTargetInfo,
   type ConnectBrowserOptions
@@ -27,6 +29,29 @@ export {
 } from "./session-manager";
 
 export {
+  browserContent,
+  browserExtract,
+  browserLinks,
+  browserMarkdown,
+  browserPdf,
+  browserScrape,
+  browserScreenshot,
+  browserSnapshot,
+  runQuickAction,
+  type QuickAction,
+  type QuickActionBinary,
+  type QuickActionBinding,
+  type QuickActionCommonOptions,
+  type QuickActionExtractInput,
+  type QuickActionInput,
+  type QuickActionPage,
+  type QuickActionScrapeInput,
+  type QuickActionScrapeResult,
+  type QuickActionScreenshotInput,
+  type QuickActionSnapshot
+} from "./quick-actions";
+
+export {
   loadCdpSpec,
   type CdpSpecSource,
   type SearchableCdpSpec
@@ -38,7 +63,11 @@ export {
   type BrowserConnectorOptions,
   type BrowserConnectorSessionOptions,
   type BrowserConnectorSweepOptions,
-  type BrowserConnectorSweepResult
+  type BrowserConnectorSweepResult,
+  type BrowserLiveView,
+  type BrowserLiveViewTarget,
+  type BrowserLiveViewUrl,
+  type LiveViewMode
 } from "./connector";
 
 // Re-exported so browser-tool consumers can satisfy the facet wiring with
