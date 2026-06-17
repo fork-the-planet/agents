@@ -6,6 +6,18 @@ Think works as both a **top-level agent** (WebSocket chat to browser clients via
 
 > **Experimental.** The API surface is stable but may evolve before graduating out of experimental.
 
+## Why Think
+
+Think is for agents whose work must outlive the request. The opinionated pieces are the ones that are tedious and dangerous to get right by hand:
+
+- **Durable turns** — an in-flight turn survives Durable Object eviction and resumes; it is not silently lost on deploy or hibernation.
+- **Recovery-aware delivery** — replies are snapshotted as `accepted`, `streaming`, or `completed`, so a restart replays a not-yet-streamed answer but posts a safe interruption notice instead of a duplicate partial. See [Delivery and Recovery](./messengers.md#delivery-and-recovery).
+- **Durable submissions** — webhooks and RPC callers submit a turn with an idempotency key and check status later. See [Programmatic Submissions](./programmatic-submissions.md).
+- **Sessions, not just a message list** — tree-structured history with branching, compaction, and full-text search.
+- **Human-in-the-loop and client tools** — a turn can pause for approval or a browser-side tool and resume later, without holding a request open. See [Human in the Loop](../human-in-the-loop.md) and [Client Tools](./client-tools.md).
+
+If you only need a chat-protocol adapter where you own the loop and the `Response`, use [`AIChatAgent`](../chat-agents.md) instead. See [Choose your path](../index.md#choose-your-path) for the full comparison.
+
 ## Quick Start
 
 ### Install
@@ -416,6 +428,77 @@ imported types.
 Use `think types --check` in CI to verify Think-generated files are current
 without modifying the working tree.
 
+### Runtime CLI
+
+Once an agent is running — locally with `pnpm dev` or deployed to a Worker — you
+can reach it from the terminal. `think init`, `think inspect`, and `think types`
+are build-time tools; `think studio` and `think state` connect to the live
+Durable Object over the same chat WebSocket the browser client uses.
+
+> These commands are experimental and may change in any release.
+
+Launch Think Studio — a local web app for chatting with and inspecting a running
+Think instance:
+
+```bash
+# Local dev server (defaults to localhost:5173)
+npx @cloudflare/think studio support
+
+# A specific instance, against a deployed Worker, with an auth token
+npx @cloudflare/think studio support alice --url https://app.example.com --token "$TOKEN"
+```
+
+`studio` starts a tiny local server, opens your browser, and serves a bundled
+single-page app. The connect screen is pre-filled from the flags you passed (and
+from the local manifest's agent list when run inside a Think project), but you
+can point it at any local or remote Think instance from the UI. Once connected,
+Studio gives you:
+
+- A **chat view** with token-by-token streaming, tool calls, and inline
+  approve/reject buttons for `needsApproval` tools.
+- A read-only **inspector** showing the agent's identity, connection status,
+  live state, recent history count, and a turn/recovery status badge.
+
+The browser talks to the agent directly over a WebSocket, so the Studio server
+stays a thin static launcher (`--port` to change it, `--no-open` to skip
+opening the browser). **Chatting drives a real, persisted turn** against the live
+agent — it writes to the agent's session exactly as any browser client would.
+
+When you run `pnpm dev`, the Think Vite plugin also adds an **`s` shortcut** to
+the dev server: press `s` (alongside Vite's built-in `r`/`u`/`o`/`c`/`q`) to
+launch Studio pointed at the running dev server. Pass `studioShortcut: false` to
+the `think()` Vite plugin to disable it.
+
+Print an agent's identity, state, and recent history without sending a message:
+
+```bash
+npx @cloudflare/think state support alice --limit 20
+npx @cloudflare/think state support --json
+```
+
+Both commands share the same connection flags:
+
+| Flag             | Description                                                 |
+| ---------------- | ----------------------------------------------------------- |
+| `<agent>`        | Manifest agent id/alias, or a raw route segment             |
+| `[instance]`     | Agent instance name (default `default`)                     |
+| `--url <origin>` | Remote origin, e.g. `https://app.example.com` (implies wss) |
+| `--host <h[:p]>` | Local host (default `localhost:5173`; Wrangler uses `8787`) |
+| `--protocol`     | Force `ws` or `wss`                                         |
+| `--token <t>`    | Auth token, sent as the `token` query param                 |
+| `--query k=v`    | Extra query params (repeatable)                             |
+| `--route-prefix` | Override the Think route prefix                             |
+| `--root`         | Project root used to discover the manifest (default cwd)    |
+
+WebSocket upgrades cannot send custom headers, so `--token` is delivered as a
+query parameter — see [Cross-domain authentication](/agents/api-reference/cross-domain-authentication/)
+for how to validate it server-side. Run from inside a Think project so the CLI
+can resolve friendly agent ids and a custom route prefix from the manifest; from
+anywhere else, pass the literal route segment and `--route-prefix` directly.
+
+The CLI uses Node's built-in `WebSocket`, so it requires Node.js 24+ and adds no
+extra dependencies.
+
 ## Messengers
 
 Think agents can receive and reply to messenger webhooks directly. Messenger
@@ -607,7 +690,7 @@ driving the work and what the caller needs back.
 | A parent agent delegates work to a retained child agent        | `agentTool()` or `runAgentTool()`               |
 | Surround a turn with idempotent app-owned side effects         | `startFiber()`                                  |
 | Coordinate multi-step durable orchestration                    | Workflows                                       |
-| Add context or messages without starting a model turn          | `persistMessages()`                             |
+| Add context or messages without starting a model turn          | `addMessages()`                                 |
 | Advanced subclass or recovery code continues an assistant turn | `continueLastTurn()`                            |
 
 Use [`saveMessages()`](./sub-agents.md#programmatic-turns-with-savemessages)
@@ -632,6 +715,39 @@ internal recovery records, not externally inspectable application jobs.
 
 Use [Workflows](../workflows.md) when the durable unit is a multi-step process
 with retries per step, long waits, external events, or approvals.
+
+### Adding messages without a turn
+
+Use `addMessages()` to write to the transcript **without** starting a model turn
+— for importing prior history or injecting background context the next turn
+should see:
+
+```typescript
+await this.addMessages([
+  {
+    id: crypto.randomUUID(),
+    role: "user",
+    parts: [{ type: "text", text: "Imported context" }]
+  }
+]);
+```
+
+`addMessages()` appends (or upserts) into the Session tree:
+
+- It does **not** run inference and does **not** enter the turn queue, so it is
+  safe to call from inside a tool's `execute` without deadlocking.
+- Array entries are appended **linearly** (each attaches under the previous one),
+  so imported history stays a single path. By default the first message attaches
+  to the latest committed leaf; pass `parentId` to attach elsewhere, or `null`
+  for a root message.
+- Appends are **idempotent by message id**. Pass `{ mode: "upsert" }` to update
+  an existing message in place instead.
+
+This is distinct from `saveMessages()` (which runs a turn) and from
+`AIChatAgent`'s `persistMessages()` (which replaces/reconciles a flat array
+rather than appending into a tree). The supported pattern is "add context, then
+run a turn": call `addMessages()`, then `saveMessages()` / the WebSocket chat
+path.
 
 ## Configuration Overrides
 

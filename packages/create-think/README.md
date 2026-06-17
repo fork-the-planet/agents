@@ -34,6 +34,8 @@ npm create think@latest [directory] -- [options]
 | `personal-assistant` | Persistent memory (`configureSession`) and scheduled tasks |
 | `coding-agent`       | Workspace file tools and a coding skill                    |
 | `customer-support`   | Custom tools and an escalation skill                       |
+| `webhook-agent`      | Inbound webhooks via durable, idempotent submissions       |
+| `business-workflow`  | Human-in-the-loop approval gates and a scheduled digest    |
 
 ```sh
 npm create think@latest my-agent -- --template coding-agent
