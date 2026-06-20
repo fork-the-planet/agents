@@ -32,6 +32,10 @@
       {
         "name": "ChatBufferCleanupAgent",
         "class_name": "ChatBufferCleanupAgent"
+      },
+      {
+        "name": "ChatHangingRecoveryAgent",
+        "class_name": "ChatHangingRecoveryAgent"
       }
     ]
   },
@@ -61,6 +65,10 @@
     {
       "tag": "v5",
       "new_sqlite_classes": ["ChatBufferCleanupAgent"]
+    },
+    {
+      "tag": "v6",
+      "new_sqlite_classes": ["ChatHangingRecoveryAgent"]
     }
   ]
 }

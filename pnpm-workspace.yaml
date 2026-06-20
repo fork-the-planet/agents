@@ -14,6 +14,10 @@ patchedDependencies:
   "@chonkiejs/chunk@0.9.3": patches/@chonkiejs+chunk+0.9.3.patch
   vitest-browser-react@2.2.0: patches/vitest-browser-react+2.2.0.patch
 allowBuilds:
+  # pi-recovery fixture deps (@earendil-works/pi-ai); the faux provider path
+  # never invokes these, so their postinstall/native builds are not needed.
+  "@google/genai": false
+  protobufjs: false
   "@mongodb-js/zstd": true
   autoevals: set this to true or false
   better-sqlite3: true
@@ -23,6 +27,9 @@ allowBuilds:
   nx: true
   sharp: true
   workerd: true
+  # Transitive dep of @cloudflare/tanstack-ai (tanstack-recovery harness). The
+  # Workers AI binding path never uses the OpenRouter SDK, so its build is skipped.
+  "@openrouter/sdk": false
 minimumReleaseAgeExclude:
   - "@cloudflare/*"
   - "@typescript/*"
@@ -73,3 +80,7 @@ minimumReleaseAgeExclude:
   - wrangler@4.100.0
   - partyserver@0.5.8
   - workers-ai-provider@3.2.0
+  - "@tanstack/ai-client@0.18.0"
+  - "@tanstack/ai-event-client@0.6.3"
+  - "@tanstack/ai-react@0.15.9"
+  - "@tanstack/ai@0.32.0"

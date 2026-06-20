@@ -13,6 +13,7 @@
 import { nanoid } from "nanoid";
 import type { Connection } from "agents";
 import { CHAT_MESSAGE_TYPES } from "./protocol";
+import { sendIfOpen } from "./connection";
 
 /** Number of chunks to pack into a single SQLite row before flushing */
 const CHUNK_BUFFER_SIZE = 10;
@@ -54,6 +55,19 @@ const ABANDONED_STREAM_RETENTION_MS = 60 * 60 * 1000;
 const textEncoder = new TextEncoder();
 
 /**
+ * How far ahead (seconds) to schedule the resumable-stream buffer cleanup
+ * alarm. Set to the short completion-grace window ({@link COMPLETED_RETENTION_MS},
+ * 10m) so a finished buffer is reclaimed promptly. The re-arm-while-reclaimable
+ * loop (see {@link cleanupStreamBuffers}) revisits any longer-lived rows — e.g.
+ * an abandoned in-flight buffer on its 1h window — by waking again each interval
+ * until they age out, then stops. Driving cleanup from an alarm (rather than
+ * only piggybacking on the next stream completion) ensures idle/one-off chat
+ * DOs still reclaim their buffers without waking forever (#1706). Shared by
+ * `AIChatAgent` and `Think`.
+ */
+export const STREAM_CLEANUP_DELAY_SECONDS = 10 * 60;
+
+/**
  * A stored row body is either a single chunk body (a JSON object string —
  * legacy per-chunk rows and single-chunk segments) or a packed segment (a JSON
  * array of chunk body strings). Unpack to the individual chunk bodies in order.
@@ -71,23 +85,6 @@ function unpackSegmentBody(rowBody: string): string[] {
     // Not valid JSON — treat as a single opaque body.
   }
   return [rowBody];
-}
-
-function sendIfOpen(connection: Connection, message: string): boolean {
-  try {
-    connection.send(message);
-    return true;
-  } catch (error) {
-    if (isWebSocketClosedSendError(error)) return false;
-    throw error;
-  }
-}
-
-function isWebSocketClosedSendError(error: unknown): boolean {
-  return (
-    error instanceof TypeError &&
-    error.message.includes("WebSocket send() after close")
-  );
 }
 
 function isMissingMetadataColumnError(error: unknown): boolean {
@@ -912,5 +909,27 @@ export class ResumableStream {
       insert into cf_ai_chat_stream_chunks (id, stream_id, body, chunk_index, created_at)
       values (${nanoid()}, ${streamId}, ${body}, 0, ${createdAt})
     `;
+  }
+}
+
+/**
+ * The buffer-cleanup alarm body: sweep aged stream buffers, then re-arm only
+ * while rows remain so a fully-swept DO stops waking itself. `rearm` schedules
+ * the next sweep — it MUST schedule a non-idempotent alarm, because this runs
+ * INSIDE the currently-executing one-shot schedule row, which `alarm()` deletes
+ * only after it returns; an idempotent reschedule would dedup onto that row and
+ * be deleted with it, so the re-arm would silently never fire and buffers that
+ * survived this sweep (e.g. a younger turn) would go uncollected. A fresh
+ * delayed row survives the deletion. Shared by `AIChatAgent` and `Think`.
+ *
+ * `@internal`
+ */
+export async function cleanupStreamBuffers(
+  stream: Pick<ResumableStream, "cleanup" | "hasReclaimableStreams">,
+  rearm: () => Promise<void>
+): Promise<void> {
+  stream.cleanup();
+  if (stream.hasReclaimableStreams()) {
+    await rearm();
   }
 }

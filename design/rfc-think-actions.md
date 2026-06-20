@@ -24,7 +24,14 @@ Second of three sibling API RFCs (turns, actions, channels) to be picked up in
 - **Depends on the chat-recovery RFC** for the ledger's replay-safety: the
   recovery-replay tests and the §7 recovery taxonomy reconcile with
   `classifyRecoveredTurn` and should be sequenced **after** chat-recovery RFC
-  Phase 3.
+  Phase 3. (Name reconciliation, updated 2026-06: the seam shipped as
+  `ChatRecoveryAdapter` in `agents/chat`; chat-recovery Phases 0–5 and the engine
+  extraction are complete. The wake-path decision shipped as the package-owned
+  `ChatFiberWakeHooks` classify/dispatch hook pair (`classifyRecoveredTurn` /
+  `dispatchRecoveredTurn`-shaped). Per that RFC's "Substrate capabilities are
+  optional" decision, `Think`'s recovery decision stays package-owned, so the
+  ledger can be consulted inside `dispatchRecoveredTurn` on recovery re-entry. Use
+  the real hook names or update them here when building.)
 - **Partial early win available:** suggested-order step 1 (the `action()`
   descriptor + `actionToTool` guardrails, no permissions/ledger) is purely
   additive and can land before Turns/recovery; the ledger (§6) and recovery

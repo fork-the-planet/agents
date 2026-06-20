@@ -157,6 +157,7 @@ interface ChatRecoveryTestStub {
     reason?: string;
   } | null>;
   getChatRecoveringForTest(): Promise<{ requestId?: string } | null>;
+  getRecoveringConnectFrameForTest(): Promise<Record<string, unknown> | null>;
   enableExhaustedCaptureForTest(
     maxAttempts: number,
     terminalMessage?: string
@@ -182,6 +183,11 @@ interface ChatRecoveryTestStub {
   driveErroredTurnForTest(
     message: string
   ): Promise<"completed" | "error" | "aborted" | "skipped">;
+  setChatStreamStallTimeoutForTest(ms: number): Promise<void>;
+  driveStallingTurnForTest(options?: {
+    timeoutMs?: number;
+    hangTurns?: number;
+  }): Promise<"completed" | "error" | "aborted" | "skipped">;
 }
 
 async function getTestAgent(room: string): Promise<ChatRecoveryTestStub> {
@@ -899,9 +905,9 @@ describe("onChatRecovery", () => {
       terminalMessage
     });
 
-    // `_exhaustChatRecovery` already persisted the durable terminal record and
-    // delivered the banner. The incident seal is best-effort bookkeeping, so a
-    // transient here must not propagate to `_executeScheduleCallback` and
+    // `_exhaustChatRecovery` already delivered the banner and persisted the
+    // durable terminal record. The incident seal is best-effort bookkeeping, so
+    // a transient here must not propagate to `_executeScheduleCallback` and
     // re-deliver the whole give-up unnecessarily.
     expect(result.threw).toBe(false);
     expect(result.terminalBroadcast).toBe(terminalMessage);
@@ -2142,6 +2148,34 @@ describe("onChatRecovery", () => {
     expect(await agentStub.getChatRecoveringForTest()).toBeNull();
   });
 
+  it("replays the 'recovering…' status on connect, cleared on terminal (#1620 convergence)", async () => {
+    const agentStub = await getTestAgent(
+      `recovering-connect-${crypto.randomUUID()}`
+    );
+    const begun = await agentStub.beginIncidentForTest({
+      requestId: "root-rec",
+      recoveryRootRequestId: "root-rec",
+      latestUserMessageId: "u1",
+      recoveryKind: "continue"
+    });
+
+    // Before a continuation is scheduled there is no recovering status to replay.
+    expect(await agentStub.getRecoveringConnectFrameForTest()).toBeNull();
+
+    // Scheduling marks the turn "recovering"; a client connecting mid-recovery
+    // (no active stream) now learns the turn is working, not frozen — matching
+    // @cloudflare/think. (Previously AIChatAgent only broadcast it live.)
+    await agentStub.updateIncidentForTest(begun.incidentId, "scheduled");
+    const frame = await agentStub.getRecoveringConnectFrameForTest();
+    expect(frame?.type).toBe("cf_agent_chat_recovering");
+    expect(frame?.recovering).toBe(true);
+    expect(frame?.id).toBe("root-rec");
+
+    // A terminal outcome clears it so the on-connect replay can't spin forever.
+    await agentStub.updateIncidentForTest(begun.incidentId, "failed", "boom");
+    expect(await agentStub.getRecoveringConnectFrameForTest()).toBeNull();
+  });
+
   // #1645: a recovery that exhausts while NO client is connected currently
   // only broadcasts the terminal frame transiently — there is no durable
   // record, so a client that (re)connects afterward and runs the standard
@@ -2473,5 +2507,87 @@ describe("onChatRecovery", () => {
     ws.close(1000);
 
     expect(await agentStub.getPendingChatTerminalForTest()).toBeNull();
+  });
+});
+
+// Slice 3b (#1626): the live-stream inactivity watchdog. With
+// `chatStreamStallTimeoutMs > 0`, a model/transport stream that parks between
+// chunks is aborted and routed into the SAME bounded-recovery machinery a
+// deploy/eviction interruption uses, instead of leaving the turn hung forever.
+describe("stall watchdog (chatStreamStallTimeoutMs)", () => {
+  it("routes a stalled live stream into bounded recovery (schedules a continuation)", async () => {
+    const room = `stall-route-${crypto.randomUUID()}`;
+    const agentStub = await getTestAgent(room);
+
+    // The model streams a partial then hangs; the watchdog trips after the gap.
+    const status = await agentStub.driveStallingTurnForTest({
+      timeoutMs: 150,
+      hangTurns: 1
+    });
+
+    // This attempt did not terminalize — the scheduled continuation owns the
+    // real outcome, so the server-side turn reports "aborted".
+    expect(status).toBe("aborted");
+
+    // The stall opened a bounded-recovery incident through the shared engine —
+    // a `continue` incident, exactly like a deploy interruption (rather than
+    // leaking a terminal error). The scheduled `_chatRecoveryContinue` row is
+    // consumed by the delay-0 alarm, so the durable incident (not the transient
+    // schedule row) is the stable evidence the stall was routed.
+    const incidents =
+      (await agentStub.getChatRecoveryIncidentsForTest()) as Array<{
+        recoveryKind: string;
+        status: string;
+      }>;
+    expect(incidents.length).toBeGreaterThanOrEqual(1);
+    expect(incidents[0].recoveryKind).toBe("continue");
+
+    // The partial generated before the stall was persisted (not lost), so the
+    // continuation re-anchors onto it rather than re-running from scratch.
+    const messages = (await agentStub.getPersistedMessages()) as Array<{
+      role: string;
+      parts: Array<{ type: string; text?: string }>;
+    }>;
+    const assistant = messages.find((m) => m.role === "assistant");
+    expect(assistant, `messages=${JSON.stringify(messages)}`).toBeTruthy();
+    expect(
+      assistant?.parts.some(
+        (p) =>
+          p.type === "text" && (p.text ?? "").includes("partial before stall")
+      )
+    ).toBe(true);
+  });
+
+  it("passes a healthy (non-stalling) stream through unchanged when the watchdog is armed", async () => {
+    const room = `stall-healthy-${crypto.randomUUID()}`;
+    const agentStub = await getTestAgent(room);
+
+    // Arm the watchdog with a timeout comfortably above the (effectively
+    // instant) inter-chunk gap of a healthy SSE stream. The guarded read path
+    // must pass a non-stalling stream through unchanged — the turn completes
+    // normally, with no recovery incident and no continuation scheduled, and
+    // the watchdog timer must be cleared on completion (no spurious late trip).
+    await agentStub.setChatStreamStallTimeoutForTest(1000);
+    expect(await agentStub.driveSuccessfulTurnForTest()).toBe("completed");
+
+    expect(await agentStub.getChatRecoveryIncidentsForTest()).toHaveLength(0);
+    expect(
+      await agentStub.getScheduleCountForCallback("_chatRecoveryContinue")
+    ).toBe(0);
+  });
+
+  it("does not arm the watchdog when the stall timeout is 0 (default, opt-in)", async () => {
+    const room = `stall-off-${crypto.randomUUID()}`;
+    const agentStub = await getTestAgent(room);
+
+    // Timeout 0 => watchdog disabled. A normal (non-hanging) turn completes as
+    // usual with no recovery incident and no continuation scheduled.
+    await agentStub.setChatStreamStallTimeoutForTest(0);
+    expect(await agentStub.driveSuccessfulTurnForTest()).toBe("completed");
+
+    expect(await agentStub.getChatRecoveryIncidentsForTest()).toHaveLength(0);
+    expect(
+      await agentStub.getScheduleCountForCallback("_chatRecoveryContinue")
+    ).toBe(0);
   });
 });
