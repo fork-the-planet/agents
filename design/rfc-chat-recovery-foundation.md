@@ -1075,6 +1075,28 @@ cells are left as the original record; this is the authoritative status):
   `chatStreamStallTimeoutMs` defaulting to `0` (disabled), so the rollout is a pure
   capability addition with no silent behavior change (parity with Think). **DONE**,
   bucket 1. See the corrected "Adopt shared stall recovery" decision below.
+- **Pending interaction predicates** — **DONE**, **bucket 1 (behavior drift, Think
+  better)** — correcting an earlier review pass that had drifted toward "bucket 3,
+  keep divergent." The real gap: on an interrupted **server tool** (its `execute()`
+  died with the evicted isolate, leaving a dead `input-available` orphan nothing
+  will ever resolve), Think **recovers** the turn while ai-chat **gave up**. Think's
+  recovery-path stability wait excludes the dead orphan (its predicate is
+  client-only by construction) AND it repairs the transcript before inference, so
+  `convertToModelMessages` doesn't 400 with `AI_MissingToolResultsError`. ai-chat's
+  recovery wait used the **broad** `hasPendingInteraction()` and had no repair pass,
+  so it rescheduled until the budget was spent and terminalized via `onExhausted`.
+  Converged in three sub-slices: (A.1) extracted Think's `_repairToolTranscriptParts`
+  into the shared `@internal` `agents/chat` `repairInterruptedToolParts` primitive
+  (Think delegates, behavior-neutral; `agents`/`think` patches); (A.2) ai-chat
+  adopts it on the recovery-continue/retry path via a new overridable
+  `repairInterruptedToolPart` hook (`@cloudflare/ai-chat` minor); (A.3) ai-chat's
+  recovery-scoped stability wait now gates on the narrow client-resolvable predicate
+  (an optional `pendingInteraction` arg to `waitUntilStable`; the broad default —
+  and the documented app-override semantics — are unchanged). Repair only ever
+  reshapes **assistant** tool parts, so per-channel policy on the **user** message
+  (`metadata.channel`, re-resolved on wake) is structurally untouched. e2e: a
+  dead-server-tool orphan now **recovers** (repairs to errored, continues) instead
+  of waiting-then-`onExhausted`.
 
 Going forward, new matrix rows should carry an explicit **status** (proposed /
 DONE) and **litmus bucket** (1 behavior-drift / 2 bug-asymmetry / 3 product) so the
@@ -1429,9 +1451,16 @@ records.
 The deploy that ships this refactor is itself a deploy-mid-recovery event. When
 the new engine boots, it can find incidents, snapshots, and schedule rows written
 by the old per-package code. The refactor must round-trip every persisted artifact
-without a data migration. Today the `ChatRecoveryIncident` shape, its keys, and
-the incident-id formula are duplicated verbatim in both packages and are not yet
-in `agents/chat`; moving them must preserve the exact serialized contract.
+without a data migration.
+
+> **Status correction (2026-06).** The `ChatRecoveryIncident` shape, its keys,
+> and the incident-id formula are **no longer duplicated** — they now live in the
+> shared `agents/chat/recovery-incident.ts` (`ChatRecoveryIncident`,
+> `CHAT_RECOVERY_INCIDENT_KEY_PREFIX`, `chatRecoveryIncidentId`,
+> `evaluateChatRecoveryIncident`), which both hosts call. The serialized contract
+> below was preserved through that move and remains the authority for cutover
+> round-tripping; the original "duplicated verbatim in both packages" wording was
+> the pre-cutover state.
 
 ### Cutover invariants
 
