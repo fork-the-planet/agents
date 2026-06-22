@@ -17,8 +17,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Deterministic Playwright suite. Drives only mock agents against an AI-free
+  # worker, so it boots offline/instantly and needs no Cloudflare credentials.
+  # This is the gating, always-green ai-chat e2e signal. (The Workers-AI specs
+  # run in the separate `e2e-ai-chat-llm` job below, which is bounded by a
+  # globalTimeout so a flaky edge connection can never cancel a job at the cap.)
   e2e-ai-chat:
-    name: "E2E: ai-chat (Playwright)"
+    name: "E2E: ai-chat (Playwright, deterministic)"
     timeout-minutes: 30
     runs-on: ubuntu-24.04
     steps:
@@ -45,11 +50,47 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: Run ai-chat e2e tests
+      - name: Run ai-chat deterministic e2e tests
+        run: pnpm run test:e2e:playwright
+        working-directory: packages/ai-chat
+
+  # Workers-AI Playwright suite. Needs the remote `ai` binding and a healthy
+  # Workers AI edge connection. Real-model latency/flakiness is bounded by a
+  # hard globalTimeout in playwright.llm.config.ts so this can never silently
+  # run to the job's 30-minute cancel.
+  e2e-ai-chat-llm:
+    name: "E2E: ai-chat (Playwright, Workers AI)"
+    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - uses: ./.github/actions/install
+
+      - run: pnpm run build
+
+      - name: Get Playwright version
+        id: playwright-version
+        run: echo "version=$(node -p 'require(\"playwright/package.json\").version')" >> $GITHUB_OUTPUT
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v5
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run ai-chat Workers AI e2e tests
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: pnpm exec playwright test --config e2e/playwright.config.ts
+        run: pnpm run test:e2e:playwright:llm
         working-directory: packages/ai-chat
 
   e2e-think:
@@ -143,21 +184,102 @@ jobs:
         run: pnpm run test:e2e
         working-directory: experimental/pi-recovery
 
+      # The real-Workers-AI tanstack leg is enabled here (secrets available in
+      # nightly); locally it stays gated behind RUN_WORKERS_AI_E2E so contributors
+      # without an `ai` binding skip it.
       - name: Run tanstack-recovery genericity e2e
         env:
+          RUN_WORKERS_AI_E2E: "1"
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: pnpm run test:e2e
         working-directory: experimental/tanstack-recovery
 
+  # Deterministic codemode Playwright suite (Layer 4b). Drives the dynamic
+  # Worker-loader code-generation flow in a real browser; offline, no Cloudflare
+  # credentials. Mirrors `e2e-ai-chat`. A `globalTimeout` in its
+  # playwright.config.ts bounds it so a hang can never silently run to the cap.
+  e2e-codemode:
+    name: "E2E: codemode (Playwright)"
+    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - uses: ./.github/actions/install
+
+      - run: pnpm run build
+
+      - name: Get Playwright version
+        id: playwright-version
+        run: echo "version=$(node -p 'require(\"playwright/package.json\").version')" >> $GITHUB_OUTPUT
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v5
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run codemode e2e tests
+        run: pnpm run test:e2e
+        working-directory: packages/codemode
+
+  # Browser-connector e2e (Layer 3c). Spawns a real `wrangler dev` (local Browser
+  # Rendering simulator + worker loader) and drives `BrowserConnector` over CDP.
+  # Kept out of the default unit `test` target (it needs Chromium); runs here
+  # nightly instead.
+  e2e-agents-browser:
+    name: "E2E: agents (browser connector)"
+    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - uses: ./.github/actions/install
+
+      - run: pnpm run build
+
+      - name: Get Playwright version
+        id: playwright-version
+        run: echo "version=$(node -p 'require(\"playwright/package.json\").version')" >> $GITHUB_OUTPUT
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v5
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}
+
+      - name: Install Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run agents browser-connector e2e tests
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: pnpm run test:browser
+        working-directory: packages/agents
+
   # ── DEPLOYED (Layer-5) recovery suites ──────────────────────────────────────
   # These deploy REAL, billable Workers and drive recovery on Cloudflare's edge
-  # (not local workerd). They are OPT-IN: skipped unless the repo variable
-  # `RUN_DEPLOYED_E2E` is `1`, or a manual run sets the `run_deployed` input.
-  # Each suite uniquely names its throwaway Worker and always deletes it.
+  # (not local workerd). They run on the nightly SCHEDULE. For manual
+  # `workflow_dispatch` runs they stay opt-in (set the `run_deployed` input, or
+  # the `RUN_DEPLOYED_E2E` repo variable) so ad-hoc debugging runs don't deploy
+  # billable Workers unintentionally. Each suite uniquely names its throwaway
+  # Worker and always deletes it.
   e2e-deployed-ai-chat:
     name: "E2E (deployed): ai-chat recovery on real edge"
-    if: ${{ vars.RUN_DEPLOYED_E2E == '1' || github.event.inputs.run_deployed == 'true' }}
+    if: ${{ github.event_name == 'schedule' || vars.RUN_DEPLOYED_E2E == '1' || github.event.inputs.run_deployed == 'true' }}
     timeout-minutes: 30
     runs-on: ubuntu-24.04
     steps:
@@ -182,7 +304,7 @@ jobs:
 
   e2e-deployed-think-probe:
     name: "E2E (deployed): Think recovery probe on real edge"
-    if: ${{ vars.RUN_DEPLOYED_E2E == '1' || github.event.inputs.run_deployed == 'true' }}
+    if: ${{ github.event_name == 'schedule' || vars.RUN_DEPLOYED_E2E == '1' || github.event.inputs.run_deployed == 'true' }}
     timeout-minutes: 30
     runs-on: ubuntu-24.04
     steps:

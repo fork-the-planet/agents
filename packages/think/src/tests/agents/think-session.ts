@@ -1959,6 +1959,73 @@ export class StuckThinkAgentToolChild extends Agent {
   }
 }
 
+/**
+ * Middle layer for nested agent-tools (grandparent → middle → grandchild). As a
+ * valid agent-tool CHILD it inherits the full child adapter from
+ * {@link ThinkTestAgent}; as a PARENT it dispatches its own grandchild run via
+ * `runAgentTool` at the start of its run. The grandchild's frames are observed
+ * only by the middle (its immediate parent) — observation does not bridge up to
+ * the grandparent.
+ */
+export class ThinkNestedMiddleAgent extends ThinkTestAgent {
+  override async startAgentToolRun(
+    input: unknown,
+    options: { runId: string }
+  ): Promise<AgentToolRunInspection> {
+    await this.runAgentTool(ThinkTestAgent, {
+      runId: `${options.runId}-grandchild`,
+      parentToolCallId: "nested-grandchild-call",
+      input: "grandchild work",
+      inputPreview: "grandchild work"
+    });
+    return super.startAgentToolRun(input, options);
+  }
+
+  /** This facet's OWN parent registry rows (the grandchild runs it dispatched). */
+  getAgentToolRunStatusesForTest(): Array<{ runId: string; status: string }> {
+    const rows = this.sql<{ run_id: string; status: string }>`
+      SELECT run_id, status FROM cf_agent_tool_runs ORDER BY started_at ASC
+    `;
+    return rows.map((r) => ({ runId: r.run_id, status: r.status }));
+  }
+
+  /** Set THIS middle node's own concurrency cap (independent of its parent). */
+  async setMaxConcurrentAgentToolsForTest(limit: number): Promise<void> {
+    this.maxConcurrentAgentTools = limit;
+  }
+
+  /**
+   * Launch `count` grandchildren concurrently against the MIDDLE node's own cap,
+   * to prove each nesting level enforces its own `maxConcurrentAgentTools`
+   * independently of its parent's.
+   */
+  async runConcurrentGrandchildrenForTest(
+    count: number
+  ): Promise<Array<{ runId: string; status: string; error?: string }>> {
+    const runIds = Array.from(
+      { length: count },
+      (_, i) => `gc-${i}-${crypto.randomUUID()}`
+    );
+    return Promise.all(
+      runIds.map((runId) =>
+        this.runAgentTool(ThinkTestAgent, {
+          runId,
+          parentToolCallId: `gc-${runId}`,
+          input: "grandchild work",
+          inputPreview: "grandchild work"
+        }).then(
+          (r) => ({ runId, status: r.status, error: r.error }),
+          (e: unknown) => ({
+            runId,
+            status: "throw",
+            error: e instanceof Error ? e.message : String(e)
+          })
+        )
+      )
+    );
+  }
+}
+
 export class ThinkAgentToolParent extends Agent {
   // Distinctive non-default re-attach budgets so a behavioral test can prove
   // the public `AgentStaticOptions` knobs are honored (resolved + used by
@@ -2049,6 +2116,120 @@ export class ThinkAgentToolParent extends Agent {
       input,
       inputPreview: input
     });
+  }
+
+  /** Set the parent's concurrency cap at runtime (default `Infinity`). */
+  async setMaxConcurrentAgentToolsForTest(limit: number): Promise<void> {
+    this.maxConcurrentAgentTools = limit;
+  }
+
+  /**
+   * Run a nested agent-tool chain (this parent → middle → grandchild) and report
+   * the middle's terminal status, the run ids this parent observed via
+   * agent-tool events, and the middle's own grandchild run rows. Asserts the
+   * nesting works and that grandchild observation does not bridge up to here.
+   */
+  async runNestedMiddleForTest(runId: string): Promise<{
+    middleStatus: string;
+    middleError?: string;
+    parentEventRunIds: string[];
+    grandchildRuns: Array<{ runId: string; status: string }>;
+  }> {
+    this.events = [];
+    this.finishes = [];
+    const result = await this.runAgentTool(ThinkNestedMiddleAgent, {
+      runId,
+      parentToolCallId: "nested-middle-call",
+      input: "middle work",
+      inputPreview: "middle work"
+    });
+    const parentEventRunIds = Array.from(
+      new Set(this.events.map((e) => e.event.runId))
+    );
+    const middle = await this.subAgent(ThinkNestedMiddleAgent, runId);
+    const grandchildRuns = await middle.getAgentToolRunStatusesForTest();
+    return {
+      middleStatus: result.status,
+      ...(result.error !== undefined && { middleError: result.error }),
+      parentEventRunIds,
+      grandchildRuns
+    };
+  }
+
+  /**
+   * Launch `count` Think children concurrently against the current
+   * `maxConcurrentAgentTools` cap and return each run's terminal status. The cap
+   * is enforced synchronously at admission (before any await), so over-limit
+   * launches reject deterministically (`status: "error"`, no queue) without
+   * needing slow children.
+   */
+  async runConcurrentThinkChildrenForTest(
+    count: number
+  ): Promise<Array<{ runId: string; status: string; error?: string }>> {
+    this.events = [];
+    this.finishes = [];
+    const runIds = Array.from(
+      { length: count },
+      (_, i) => `concurrency-${i}-${crypto.randomUUID()}`
+    );
+    return Promise.all(
+      runIds.map((runId) =>
+        this.runAgentTool(ThinkTestAgent, {
+          runId,
+          parentToolCallId: `concurrency-${runId}`,
+          input: "concurrent child",
+          inputPreview: "concurrent child"
+        }).then(
+          (r) => ({ runId, status: r.status, error: r.error }),
+          (e: unknown) => ({
+            runId,
+            status: "throw",
+            error: e instanceof Error ? e.message : String(e)
+          })
+        )
+      )
+    );
+  }
+
+  /**
+   * Seed a PARENT-side `cf_agent_tool_runs` row with an explicit status, to
+   * assert how the concurrency cap counts (or ignores) a given lifecycle state.
+   * Soft-terminal `interrupted` rows must NOT occupy a slot (only
+   * `starting`/`running` do), so a re-issue after recovery is never cap-blocked.
+   */
+  async seedParentAgentToolRunForTest(
+    runId: string,
+    status: string
+  ): Promise<void> {
+    const now = Date.now();
+    const completedAt =
+      status === "starting" || status === "running" ? null : now;
+    this.sql`
+      INSERT INTO cf_agent_tool_runs (
+        run_id, parent_tool_call_id, agent_type, input_preview,
+        input_redacted, status, display_metadata, display_order,
+        started_at, completed_at
+      ) VALUES (
+        ${runId}, 'seed-tool-call', 'ThinkTestAgent', ${JSON.stringify("seed")},
+        1, ${status}, ${JSON.stringify({ name: "seed" })}, 0, ${now}, ${completedAt}
+      )
+    `;
+  }
+
+  /** Launch a single real Think child against the current cap. */
+  async runSingleThinkChildForTest(): Promise<{
+    status: string;
+    error?: string;
+  }> {
+    this.events = [];
+    this.finishes = [];
+    const r = await this.runAgentTool(ThinkTestAgent, {
+      runId: `single-${crypto.randomUUID()}`,
+      parentToolCallId: "single-call",
+      input: "single child",
+      inputPreview: "single child"
+    });
+    return { status: r.status, error: r.error };
   }
 
   /**
@@ -4197,6 +4378,116 @@ export class ThinkToolsTestAgent extends Think {
   async getStoredMessages(): Promise<UIMessage[]> {
     return this.getMessages();
   }
+
+  // ── Recovery-simulation helpers (for action-pause × recovery) ─────
+
+  async persistTestMessage(msg: UIMessage): Promise<void> {
+    await this.session.appendMessage(msg);
+  }
+
+  async hasPendingInteractionForTest(): Promise<boolean> {
+    return this.hasPendingInteraction();
+  }
+
+  async insertInterruptedFiber(
+    name: string,
+    snapshot?: unknown
+  ): Promise<void> {
+    const id = `fiber-${crypto.randomUUID()}`;
+    this.sql`
+      INSERT INTO cf_agents_runs (id, name, snapshot, created_at)
+      VALUES (${id}, ${name}, ${snapshot ? JSON.stringify(snapshot) : null}, ${Date.now()})
+    `;
+  }
+
+  async triggerFiberRecovery(): Promise<void> {
+    await (
+      this as unknown as { _checkRunFibers(): Promise<void> }
+    )._checkRunFibers();
+  }
+
+  async getScheduledChatRecoveryCountForTest(
+    callback = "_chatRecoveryContinue"
+  ): Promise<number> {
+    const rows = this.sql<{ count: number }>`
+      SELECT COUNT(*) as count FROM cf_agents_schedules WHERE callback = ${callback}
+    `;
+    return rows[0]?.count ?? 0;
+  }
+
+  async runScheduledRecoveryRetryForTest(): Promise<void> {
+    const rows = this.sql<{ payload: string }>`
+      SELECT payload FROM cf_agents_schedules
+      WHERE callback = '_chatRecoveryRetry'
+      ORDER BY time ASC
+      LIMIT 1
+    `;
+    if (!rows[0]) return;
+    await (
+      this as unknown as {
+        _chatRecoveryRetry(d: {
+          targetUserId?: string;
+          lastBody?: Record<string, unknown>;
+        }): Promise<void>;
+      }
+    )._chatRecoveryRetry(
+      JSON.parse(rows[0].payload) as {
+        targetUserId?: string;
+        lastBody?: Record<string, unknown>;
+      }
+    );
+  }
+
+  async insertInterruptedStream(
+    streamId: string,
+    requestId: string,
+    chunks: Array<{ body: string; index: number }>,
+    status: "streaming" | "completed" | "error" = "streaming"
+  ): Promise<void> {
+    const now = Date.now();
+    this.sql`
+      INSERT INTO cf_ai_chat_stream_metadata (id, request_id, status, created_at)
+      VALUES (${streamId}, ${requestId}, ${status}, ${now})
+    `;
+    for (const chunk of chunks) {
+      const chunkId = `${streamId}-${chunk.index}`;
+      this.sql`
+        INSERT INTO cf_ai_chat_stream_chunks (id, stream_id, chunk_index, body, created_at)
+        VALUES (${chunkId}, ${streamId}, ${chunk.index}, ${chunk.body}, ${now})
+      `;
+    }
+  }
+
+  async runScheduledRecoveryContinueForTest(): Promise<void> {
+    const rows = this.sql<{ payload: string }>`
+      SELECT payload FROM cf_agents_schedules
+      WHERE callback = '_chatRecoveryContinue'
+      ORDER BY time ASC
+      LIMIT 1
+    `;
+    if (!rows[0]) return;
+    await (
+      this as unknown as {
+        _chatRecoveryContinue(d: {
+          targetAssistantId?: string;
+          lastBody?: Record<string, unknown> | null;
+          lastClientTools?: ClientToolSchema[] | null;
+        }): Promise<void>;
+      }
+    )._chatRecoveryContinue(
+      JSON.parse(rows[0].payload) as {
+        targetAssistantId?: string;
+        lastBody?: Record<string, unknown> | null;
+        lastClientTools?: ClientToolSchema[] | null;
+      }
+    );
+  }
+
+  async getActiveFibers(): Promise<Array<{ id: string; name: string }>> {
+    return this.sql<{ id: string; name: string }>`
+      SELECT id, name FROM cf_agents_runs
+    `;
+  }
 }
 
 // ── ThinkProgrammaticTestAgent ──────────────────────────────
@@ -5595,6 +5886,38 @@ export class ThinkRecoveryTestAgent extends Think {
   private _rejectPrefill = false;
   private _lastPromptRole: string | undefined;
   private _throwBeforeTurnMessage: string | null = null;
+  // recovery × channels: capture the channel context + assembled system prompt
+  // that each turn (including recovered ones) actually ran with, so a test can
+  // assert per-channel policy is re-applied on recovery, not just that the
+  // `metadata.channel` stamp survives.
+  private _capturedTurnChannels: string[] = [];
+  private _capturedTurnSystems: string[] = [];
+
+  // A single per-channel policy (voice) so recovery tests can assert that a
+  // recovered turn re-resolves the channel from the persisted user message and
+  // re-applies BOTH its instructions and its tool policy. The channel
+  // contributes a `voiceMarker` tool — present on a recovered voice turn,
+  // absent on a recovered default-channel turn — so a test can prove the
+  // channel `tools` callback is re-invoked across recovery (not just the
+  // instruction string). (Tool *removal* is covered for non-recovery turns in
+  // channel-policy.test.ts.)
+  override configureChannels() {
+    return {
+      voice: {
+        kind: "voice" as const,
+        ingress: { transport: "voice" as const },
+        instructions: "VOICE MODE",
+        tools: () => ({
+          voiceMarker: tool({
+            description: "voice-only marker tool",
+            inputSchema: z.object({}),
+            execute: async () => "ok"
+          })
+        }),
+        maxTurns: 3
+      }
+    };
+  }
 
   override getModel(): LanguageModel {
     if (this._rejectPrefill) {
@@ -5617,6 +5940,8 @@ export class ThinkRecoveryTestAgent extends Think {
     this._turnCallCount++;
     this._turnBodies.push(ctx.body);
     this._turnClientToolNames.push(Object.keys(ctx.tools));
+    this._capturedTurnChannels.push(this.activeChannel?.channelId ?? "");
+    this._capturedTurnSystems.push(ctx.system);
 
     if (this._stashData !== null) {
       try {
@@ -5676,6 +6001,16 @@ export class ThinkRecoveryTestAgent extends Think {
 
   async getTurnCallCount(): Promise<number> {
     return this._turnCallCount;
+  }
+
+  /** The active channel id captured at each turn's `beforeTurn` (""=none). */
+  async getCapturedTurnChannelsForTest(): Promise<string[]> {
+    return this._capturedTurnChannels;
+  }
+
+  /** The assembled system prompt captured at each turn's `beforeTurn`. */
+  async getCapturedTurnSystemsForTest(): Promise<string[]> {
+    return this._capturedTurnSystems;
   }
 
   async getRecoveryContexts(): Promise<
@@ -6622,6 +6957,18 @@ export class ThinkRecoveryTestAgent extends Think {
     ]);
   }
 
+  /** Drive a programmatic turn via the unified `runTurn` (wait mode) API. */
+  async testRunTurnWait(
+    text: string,
+    options?: { channel?: string }
+  ): Promise<{ status: string; continuation: boolean }> {
+    const result = await this.runTurn({
+      input: text,
+      ...(options?.channel !== undefined && { channel: options.channel })
+    });
+    return { status: result.status, continuation: result.continuation };
+  }
+
   async testContinueLastTurn(): Promise<SaveMessagesResult> {
     return this.continueLastTurn();
   }
@@ -6857,6 +7204,86 @@ export class ThinkRecoveryTestAgent extends Think {
 
   async hasPendingInteractionForTest(): Promise<boolean> {
     return this.hasPendingInteraction();
+  }
+
+  /**
+   * Seed an in-flight (not-yet-completed) `cf_agent_tool_child_runs` row, as if
+   * this facet were running as an agent-tool child whose turn was interrupted
+   * before completing. Used to assert the recovery continuation re-binds the
+   * row's `request_id` so the parent's re-attach tail keeps attributing frames.
+   */
+  async seedAgentToolChildRunForTest(
+    runId: string,
+    requestId: string,
+    startedAt: number = Date.now()
+  ): Promise<void> {
+    (
+      this as unknown as { _ensureAgentToolChildRunTable(): void }
+    )._ensureAgentToolChildRunTable();
+    this.sql`
+      INSERT INTO cf_agent_tool_child_runs (run_id, request_id, status, started_at)
+      VALUES (${runId}, ${requestId}, 'running', ${startedAt})
+    `;
+  }
+
+  /**
+   * Seed a SETTLED (terminal) child-run row — `completed` with `completed_at`
+   * set — to assert the rebind is a no-op for already-finished runs.
+   */
+  async seedSettledAgentToolChildRunForTest(
+    runId: string,
+    requestId: string
+  ): Promise<void> {
+    (
+      this as unknown as { _ensureAgentToolChildRunTable(): void }
+    )._ensureAgentToolChildRunTable();
+    const now = Date.now();
+    this.sql`
+      INSERT INTO cf_agent_tool_child_runs
+        (run_id, request_id, status, started_at, completed_at)
+      VALUES (${runId}, ${requestId}, 'completed', ${now}, ${now})
+    `;
+  }
+
+  /** Directly invoke the rebind helper (bypassing the full recovery flow). */
+  async rebindAgentToolChildRunRequestIdForTest(
+    requestId: string
+  ): Promise<void> {
+    (
+      this as unknown as {
+        _rebindAgentToolChildRunRequestId(requestId: string): void;
+      }
+    )._rebindAgentToolChildRunRequestId(requestId);
+  }
+
+  /** Whether this facet has a `cf_agent_tool_child_runs` table at all. */
+  async hasAgentToolChildRunTableForTest(): Promise<boolean> {
+    const rows = this.sql<{ n: number }>`
+      SELECT COUNT(*) AS n FROM sqlite_master
+      WHERE type = 'table' AND name = 'cf_agent_tool_child_runs'
+    `;
+    return (rows[0]?.n ?? 0) > 0;
+  }
+
+  /** The `request_id` currently bound to an agent-tool child run row. */
+  async getAgentToolChildRunRequestIdForTest(
+    runId: string
+  ): Promise<string | null> {
+    const rows = this.sql<{ request_id: string | null }>`
+      SELECT request_id FROM cf_agent_tool_child_runs WHERE run_id = ${runId}
+    `;
+    return rows[0]?.request_id ?? null;
+  }
+
+  /** Resolve which agent-tool run a request id is attributed to (frame routing). */
+  async resolveAgentToolRunForRequestForTest(
+    requestId: string
+  ): Promise<string | null> {
+    return (
+      this as unknown as {
+        _agentToolRunForRequest(requestId: string): string | null;
+      }
+    )._agentToolRunForRequest(requestId);
   }
 
   /**

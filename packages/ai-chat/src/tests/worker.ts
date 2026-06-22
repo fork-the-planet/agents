@@ -2802,6 +2802,72 @@ export class ChatRecoveryTestAgent extends AIChatAgent<Env> {
       ` || []
     );
   }
+
+  /**
+   * Seed an in-flight (running) `cf_ai_chat_agent_tool_runs` row, as if this
+   * facet were running as an agent-tool child whose turn was interrupted before
+   * completing. Used to assert the recovery continuation re-binds the row's
+   * `request_id` so the parent's re-attach tail keeps attributing frames.
+   */
+  async seedAgentToolChildRunForTest(
+    runId: string,
+    requestId: string,
+    startedAt: number = Date.now()
+  ): Promise<void> {
+    this.sql`
+      insert into cf_ai_chat_agent_tool_runs
+        (run_id, request_id, status, input_json, started_at)
+      values (${runId}, ${requestId}, 'running', '{}', ${startedAt})
+    `;
+  }
+
+  /**
+   * Seed a SETTLED (terminal) child-run row — `completed` with `completed_at`
+   * set — to assert the rebind is a no-op for already-finished runs.
+   */
+  async seedSettledAgentToolChildRunForTest(
+    runId: string,
+    requestId: string
+  ): Promise<void> {
+    const now = Date.now();
+    this.sql`
+      insert into cf_ai_chat_agent_tool_runs
+        (run_id, request_id, status, input_json, started_at, completed_at)
+      values (${runId}, ${requestId}, 'completed', '{}', ${now}, ${now})
+    `;
+  }
+
+  /** Directly invoke the rebind helper (bypassing the full recovery flow). */
+  async rebindAgentToolChildRunRequestIdForTest(
+    requestId: string
+  ): Promise<void> {
+    (
+      this as unknown as {
+        _rebindAgentToolChildRunRequestId(requestId: string): void;
+      }
+    )._rebindAgentToolChildRunRequestId(requestId);
+  }
+
+  /** The `request_id` currently bound to an agent-tool child run row. */
+  async getAgentToolChildRunRequestIdForTest(
+    runId: string
+  ): Promise<string | null> {
+    const rows = this.sql<{ request_id: string | null }>`
+      select request_id from cf_ai_chat_agent_tool_runs where run_id = ${runId}
+    `;
+    return rows[0]?.request_id ?? null;
+  }
+
+  /** Resolve which agent-tool run a request id is attributed to (frame routing). */
+  async resolveAgentToolRunForRequestForTest(
+    requestId: string
+  ): Promise<string | null> {
+    return (
+      this as unknown as {
+        _agentToolRunForRequest(requestId: string): string | null;
+      }
+    )._agentToolRunForRequest(requestId);
+  }
 }
 
 // ── NonChatRecoveryTestAgent (same output as ChatRecoveryTestAgent, chatRecovery=false) ──

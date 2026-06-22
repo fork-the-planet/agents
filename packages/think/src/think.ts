@@ -3322,14 +3322,72 @@ export class Think<
   private _agentToolRunForRequest(requestId: string): string | null {
     const cached = this._agentToolRunsByRequestId.get(requestId);
     if (cached !== undefined) return cached;
+    // Active-run predicate: a child run is in flight while `status` is
+    // `starting`/`running`; terminal rows set `status` AND `completed_at`
+    // together (the lifecycle invariant), so this is equivalent to
+    // `completed_at IS NULL` but states the intent. Kept consistent with
+    // `_rebindAgentToolChildRunRequestId` and the ai-chat counterpart.
     const rows = this.sql<{ run_id: string }>`
       SELECT run_id FROM cf_agent_tool_child_runs
-      WHERE request_id = ${requestId} AND completed_at IS NULL
+      WHERE request_id = ${requestId} AND status IN ('starting', 'running')
       LIMIT 1
     `;
     const runId = rows[0]?.run_id ?? null;
     this._agentToolRunsByRequestId.set(requestId, runId);
     return runId;
+  }
+
+  /**
+   * Re-bind this facet's in-flight agent-tool child run to the CURRENT turn's
+   * request id.
+   *
+   * When this facet is itself running as an agent-tool child and its turn is
+   * interrupted (e.g. a deploy evicts it mid-run), the recovery continuation
+   * (`continueLastTurn` / `_retryLastUserTurn`) mints a NEW request id. The
+   * `cf_agent_tool_child_runs.request_id` column — and the in-memory attribution
+   * map — still point at the pre-eviction turn, so `broadcast` can no longer
+   * attribute the recovered turn's frames to the run. The parent's re-attach
+   * tail then sees no forwarded chunks, its no-progress budget elapses, and it
+   * abandons a healthy, still-advancing child as `interrupted`
+   * (`agentToolReattachNoProgressTimeoutMs`). Re-binding the row to the recovery
+   * turn's request id keeps frame attribution alive across recovery so the
+   * parent re-attaches and follows the child to its real terminal.
+   *
+   * Safe to call on EVERY recovery continuation:
+   *   - Facets that never ran as an agent-tool child have no
+   *     `cf_agent_tool_child_runs` table → the guarded SELECT throws → no-op.
+   *   - A facet whose run already settled has no `starting`/`running` row → no-op.
+   *   - A child DO is addressed by its `runId` (`subAgent(cls, runId)`), so it
+   *     owns AT MOST ONE child-run row for its whole lifetime and is never reused
+   *     as a top-level chat agent — the single active row is unambiguously this
+   *     recovery's run. The `ORDER BY started_at DESC LIMIT 1` is defensive
+   *     belt-and-suspenders for that invariant.
+   *
+   * Uses the same `status IN ('starting','running')` active-run predicate as
+   * `_agentToolRunForRequest` and the ai-chat counterpart (see the lifecycle
+   * invariant note there).
+   */
+  private _rebindAgentToolChildRunRequestId(requestId: string): void {
+    let runId: string | undefined;
+    try {
+      const rows = this.sql<{ run_id: string }>`
+        SELECT run_id FROM cf_agent_tool_child_runs
+        WHERE status IN ('starting', 'running')
+        ORDER BY started_at DESC
+        LIMIT 1
+      `;
+      runId = rows[0]?.run_id;
+    } catch {
+      // No child-run table on facets that never ran as an agent tool.
+      return;
+    }
+    if (!runId) return;
+    this._agentToolRunsByRequestId.set(requestId, runId);
+    this.sql`
+      UPDATE cf_agent_tool_child_runs
+      SET request_id = ${requestId}
+      WHERE run_id = ${runId}
+    `;
   }
 
   override async alarm(): Promise<void> {
@@ -9465,6 +9523,10 @@ export class Think<
     }
 
     const requestId = crypto.randomUUID();
+    // If this facet is itself an agent-tool child being recovered, re-bind its
+    // run row to this turn's request id so the parent's re-attach tail keeps
+    // attributing the continued turn's frames (no-op otherwise).
+    this._rebindAgentToolChildRunRequestId(requestId);
     const clientTools = this._lastClientTools;
     const resolvedBody = body ?? this._lastBody;
     const epoch = this._turnQueue.generation;
@@ -9553,7 +9615,7 @@ export class Think<
   private async _retryLastUserTurn(
     clientTools?: ClientToolSchema[],
     body?: Record<string, unknown>,
-    options?: SaveMessagesOptions & { trigger?: TurnTrigger }
+    options?: SaveMessagesOptions & { trigger?: TurnTrigger; channel?: string }
   ): Promise<SaveMessagesResult> {
     const trigger = options?.trigger ?? "recovery-retry";
     this._assertNotInsideAdmittedTurn(trigger);
@@ -9563,7 +9625,16 @@ export class Think<
     }
 
     const requestId = crypto.randomUUID();
+    // If this facet is itself an agent-tool child being recovered, re-bind its
+    // run row to this turn's request id so the parent's re-attach tail keeps
+    // attributing the retried turn's frames (no-op otherwise).
+    this._rebindAgentToolChildRunRequestId(requestId);
     const epoch = this._turnQueue.generation;
+    // Re-resolve the channel from the persisted user message so a recovered
+    // retry re-applies per-channel policy, exactly like `continueLastTurn`. The
+    // `metadata.channel` stamp survives the interruption; without this the
+    // retried turn would silently fall back to the default policy.
+    const channel = options?.channel ?? this._channelFromLatestUserMessage();
     let status: SaveMessagesResult["status"] = "completed";
     let error: string | undefined;
     let wasAborted = false;
@@ -9573,6 +9644,7 @@ export class Think<
       trigger,
       requestId,
       continuation: false,
+      channel,
       getStatus: () => status,
       execute: async () => {
         if (this._turnQueue.generation !== epoch) {
