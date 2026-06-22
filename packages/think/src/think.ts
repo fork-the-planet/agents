@@ -80,7 +80,10 @@
  * ```
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import type {
+  FlexibleSchema,
+  InferSchema,
   LanguageModel,
   ModelMessage,
   PrepareStepFunction,
@@ -143,6 +146,11 @@ import {
   cleanupStreamBuffers,
   STREAM_CLEANUP_DELAY_SECONDS,
   ContinuationState,
+  AutoContinuationController,
+  TIMED_OUT,
+  awaitWithDeadline,
+  drainInteractionApplies,
+  interceptAgentToolBroadcast,
   SubmitConcurrencyController,
   createToolsFromClientSchemas,
   AbortRegistry,
@@ -182,7 +190,7 @@ import {
   AgentToolStreamProgressThrottle,
   StreamProgressCreditThrottle,
   shouldCreditStreamProgress,
-  CHAT_RECOVERY_INCIDENT_KEY_PREFIX,
+  classifyAgentToolChildRecovery,
   type ChatRecoveryAdapter,
   type ChatFiberWakeHooks,
   type ResolvedRecoveryStream,
@@ -202,6 +210,7 @@ import type {
   OrphanPersistStore
 } from "agents/chat";
 import { Session } from "agents/experimental/memory/session";
+import type { SessionMessage } from "agents/experimental/memory/session";
 import { truncateOlderMessages } from "agents/experimental/memory/utils";
 import {
   evictLargeMediaFromMessage,
@@ -223,18 +232,50 @@ import {
  *   fidelity is never replaced with markers.
  */
 const MODEL_RECENT_WINDOW = 4;
+const DEFAULT_ACTION_TIMEOUT_MS = 30_000;
+const ACTION_OUTPUT_MAX_CHARS = 20_000;
+const MAX_REPLY_ATTACHMENTS_PER_TURN = 32;
+const ACTION_LEDGER_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+const ACTION_LEDGER_LAST_SWEPT_KEY = "cf_think_action_ledger:last_swept_at";
+const ACTION_PENDING_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+const ACTION_PENDING_LAST_SWEPT_KEY =
+  "cf_think_action_pending_approvals:last_swept_at";
+/** Prefix for durable-pause action execution ids (vs codemode execution ids). */
+const ACTION_PAUSE_ID_PREFIX = "actpause_";
 import { Workspace } from "@cloudflare/shell";
 import { createWorkspaceTools } from "./tools/workspace";
 import { truncatePausedExecutionOutput } from "./tools/execute";
 import { ExtensionManager, sanitizeName } from "./extensions/manager";
 import { ThinkMessengerRuntime } from "./messengers/chat-sdk";
 import type {
+  DeliveryKind,
   MessengerContext,
+  MessengerDeliverySurface,
   ThinkMessengers,
   MessengerThinkHost
 } from "./messengers";
+import { resolveChannels } from "./channels";
+import type {
+  ChannelContext,
+  NormalizedChannelDefinition,
+  ThinkChannels
+} from "./channels";
 
+export { defineChannels, messengerChannel } from "./channels";
+export type {
+  ChannelCapabilities,
+  ChannelContext,
+  ChannelDefinition,
+  ChannelDeliveryPolicy,
+  ChannelDeliverySurface,
+  ChannelIngress,
+  ChannelKind,
+  NormalizedChannelDefinition,
+  ThinkChannels
+} from "./channels";
+export type { DeliveryKind, DeliveryTag } from "./messengers";
 export { Session } from "agents/experimental/memory/session";
+export type { SessionMessage } from "agents/experimental/memory/session";
 export { Workspace } from "@cloudflare/shell";
 export type { FiberContext, FiberRecoveryContext } from "agents";
 export type { WorkspaceLike } from "./tools/workspace";
@@ -254,8 +295,13 @@ function shouldMarkSkippedAfterGenerationChange(
 }
 
 function stableStringify(value: unknown): string {
+  if (value === undefined) return "undefined";
+  if (typeof value === "function" || typeof value === "symbol") {
+    return String(value);
+  }
   if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
+    if (typeof value === "bigint") return `${value.toString()}n`;
+    return JSON.stringify(value) ?? "undefined";
   }
   if (Array.isArray(value)) {
     return `[${value.map((item) => stableStringify(item)).join(",")}]`;
@@ -287,6 +333,193 @@ function stableHash(value: unknown): string {
   return [h1, h2, h3, h4]
     .map((part) => (part >>> 0).toString(16).padStart(8, "0"))
     .join("");
+}
+
+function stableJsonEqual(left: unknown, right: unknown): boolean {
+  return stableStringify(left) === stableStringify(right);
+}
+
+function actionErrorEnvelope(error: unknown): {
+  error: { name: string; message: string };
+} {
+  return {
+    error: {
+      name: error instanceof Error ? error.name : "Error",
+      message: error instanceof Error ? error.message : String(error)
+    }
+  };
+}
+
+function actionAuthorizationErrorEnvelope(
+  reason: string | undefined,
+  permissions: string[]
+): {
+  error: { name: string; message: string; permissions: string[] };
+} {
+  return {
+    error: {
+      name: "ActionAuthorizationError",
+      message: reason ?? "Action is not authorized",
+      permissions
+    }
+  };
+}
+
+function actionApprovalInputErrorEnvelope(): {
+  error: { name: string; message: string };
+} {
+  return {
+    error: {
+      name: "ActionApprovalInputError",
+      message: "Approved action input cannot be changed by beforeToolCall"
+    }
+  };
+}
+
+function actionPendingErrorEnvelope(): {
+  error: { name: string; message: string };
+} {
+  return {
+    error: {
+      name: "ActionPendingError",
+      message:
+        "A prior attempt of this action is in an unknown state; not re-executed. Manual reconciliation may be required."
+    }
+  };
+}
+
+function actionKeyConflictEnvelope(
+  actionName: string,
+  key: string
+): {
+  error: { name: string; message: string };
+} {
+  return {
+    error: {
+      name: "ActionKeyConflict",
+      message: `Idempotency key "${key}" for action "${actionName}" was reused with different input. This is a programming error; do not retry.`
+    }
+  };
+}
+
+function encodeActionLedgerOutput(
+  output: unknown
+): { ok: true; json: string; value: unknown } | { ok: false } {
+  try {
+    const json = JSON.stringify({
+      valuePresent: output !== undefined,
+      value: output
+    });
+    if (json === undefined) return { ok: false };
+    const parsed = JSON.parse(json) as {
+      valuePresent: boolean;
+      value?: unknown;
+    };
+    if (output !== undefined && !("value" in parsed)) {
+      return { ok: false };
+    }
+    return {
+      ok: true,
+      json,
+      value: parsed.valuePresent ? parsed.value : undefined
+    };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function decodeActionLedgerOutput(json: string | null): unknown {
+  if (json === null) return undefined;
+  const parsed = JSON.parse(json) as {
+    valuePresent?: unknown;
+    value?: unknown;
+  };
+  return parsed.valuePresent === true ? parsed.value : undefined;
+}
+
+function safeStringifyActionOutput(output: unknown): {
+  value?: string;
+  lossy: boolean;
+  error?: string;
+} {
+  const seen = new WeakSet<object>();
+  let lossy = false;
+  try {
+    const value = JSON.stringify(output, (_key, value: unknown) => {
+      if (typeof value === "bigint") {
+        lossy = true;
+        return `${value.toString()}n`;
+      }
+      if (typeof value === "object" && value !== null) {
+        if (seen.has(value)) {
+          lossy = true;
+          return "[Circular]";
+        }
+        seen.add(value);
+      }
+      return value;
+    });
+    return { value, lossy };
+  } catch (error) {
+    return {
+      lossy: true,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+function prepareActionOutputForModel(output: unknown): unknown {
+  if (typeof output === "string") {
+    if (output.length <= ACTION_OUTPUT_MAX_CHARS) return output;
+    return `${output.slice(0, ACTION_OUTPUT_MAX_CHARS)}\n\n[truncated ${output.length - ACTION_OUTPUT_MAX_CHARS} chars]`;
+  }
+
+  const serialized = safeStringifyActionOutput(output);
+  if (serialized.error) {
+    return {
+      serialized: false,
+      error: serialized.error
+    };
+  }
+  if (serialized.value === undefined) return output;
+  if (serialized.value.length <= ACTION_OUTPUT_MAX_CHARS) {
+    if (!serialized.lossy) return output;
+    return JSON.parse(serialized.value) as unknown;
+  }
+
+  return {
+    truncated: true,
+    chars: serialized.value.length,
+    preview: `${serialized.value.slice(0, ACTION_OUTPUT_MAX_CHARS)}\n\n[truncated ${serialized.value.length - ACTION_OUTPUT_MAX_CHARS} chars]`
+  };
+}
+
+function createActionAbortSignal(
+  turnSignal: AbortSignal | undefined,
+  timeoutMs: number | undefined
+): { signal: AbortSignal; cleanup: () => void } {
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const abortFromTurn = () => controller.abort(turnSignal?.reason);
+
+  if (turnSignal?.aborted) {
+    abortFromTurn();
+  } else {
+    turnSignal?.addEventListener("abort", abortFromTurn, { once: true });
+    if (timeoutMs !== undefined && timeoutMs > 0) {
+      timeout = setTimeout(() => {
+        controller.abort(new Error(`Action timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+    }
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      if (timeout) clearTimeout(timeout);
+      turnSignal?.removeEventListener("abort", abortFromTurn);
+    }
+  };
 }
 
 function validateTimezone(timezone: string): string {
@@ -811,7 +1044,290 @@ export interface ChatOptions {
    * `cf_agent_tool_result` messages.
    */
   onClientToolCall?: ClientToolExecutor;
+  /** Channel id this turn belongs to. See {@link RunTurnBase.channel}. */
+  channel?: string;
 }
+
+/** Input accepted by {@link Think.runTurn}. */
+export type TurnInputMessages =
+  | string
+  | UIMessage
+  | UIMessage[]
+  | ((current: UIMessage[]) => UIMessage[] | Promise<UIMessage[]>);
+
+/** Shared base for {@link RunTurnOptions}; only `input` is common across modes. */
+export interface RunTurnBase {
+  input?: TurnInputMessages;
+  /**
+   * Channel id this turn belongs to (resolved against `configureChannels()` /
+   * `getMessengers()`). Sets the turn-scoped channel context and is persisted on
+   * the user message so a recovered/continued turn re-resolves it. Defaults to
+   * the implicit `web` channel.
+   */
+  channel?: string;
+}
+
+/** Options for {@link Think.runTurn} with `mode: "wait"` (the default). */
+export interface RunTurnWait extends RunTurnBase {
+  mode?: "wait";
+  continuation?: boolean;
+  body?: Record<string, unknown>;
+  signal?: AbortSignal;
+}
+
+/** Options for {@link Think.runTurn} with `mode: "submit"`. */
+export interface RunTurnSubmit extends RunTurnBase {
+  mode: "submit";
+  submissionId?: string;
+  idempotencyKey?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/** Options for {@link Think.runTurn} with `mode: "stream"`. */
+export interface RunTurnStream extends RunTurnBase {
+  mode: "stream";
+  callback: StreamCallback;
+  clientTools?: ClientToolSchema[];
+  onClientToolCall?: ClientToolExecutor;
+  signal?: AbortSignal;
+}
+
+export type RunTurnOptions = RunTurnWait | RunTurnSubmit | RunTurnStream;
+
+/** Result of {@link Think.runTurn} in `mode: "wait"`. */
+export type TurnResult = SaveMessagesResult & {
+  message?: SessionMessage;
+  continuation: boolean;
+};
+
+const ACTION_BRAND: unique symbol = Symbol.for(
+  "cf.think.action"
+) as typeof ACTION_BRAND;
+
+export type ActionKind =
+  | "server"
+  | "client"
+  | "approval-gated"
+  | "durable-pause"
+  | "delegated-agent";
+
+export interface ActionContext {
+  /** The agent instance currently executing the action. */
+  agent: Think;
+  env: Cloudflare.Env;
+  /** Current turn request id. */
+  requestId: string;
+  toolCallId: string;
+  /** Model messages visible to the tool call. */
+  messages: ReadonlyArray<ModelMessage>;
+  /** Combined action timeout and turn abort signal. */
+  signal: AbortSignal;
+  /**
+   * Record an advisory delivery hint for this turn's final reply (voice note,
+   * card, email draft, ...). Does not change the model-visible tool output.
+   * No-op for approval/permission/idempotency policy evaluation and for
+   * durable-pause approved-action resumes (their reply is delivered by a
+   * later continuation turn in v1).
+   */
+  attachReply(attachment: ReplyAttachment): void;
+}
+
+/**
+ * The attachment shape accepted by {@link ActionContext.attachReply}. An open
+ * union: the named variants give autocomplete for common channels, and the
+ * trailing `{ type: string; [k]: unknown }` keeps it extensible. Advisory only
+ * — surfaces that don't recognize a `type` ignore it.
+ */
+export type ReplyAttachment =
+  | { type: "voice_note" }
+  | { type: "email_draft"; subject?: string; to?: string[] }
+  | { type: "card"; payload: unknown }
+  | { type: string; [k: string]: unknown };
+
+export type ActionApprovalPolicy<Input> =
+  | boolean
+  | ((args: {
+      input: Input;
+      ctx: ActionContext;
+    }) => boolean | Promise<boolean>);
+
+export type ActionPermissionSpec<Input> =
+  | readonly string[]
+  | ((args: {
+      input: Input;
+      ctx: ActionContext;
+    }) => readonly string[] | Promise<readonly string[]>);
+
+export type ActionIdempotencyKey<Input> =
+  | string
+  | ((args: { input: Input; ctx: ActionContext }) => string | Promise<string>);
+
+export type ActionAuthorizationDecision =
+  | boolean
+  | {
+      allowed: boolean;
+      reason?: string;
+      grantedPermissions?: readonly string[];
+    };
+
+export interface ActionAuthorizationContext {
+  requestId: string;
+  toolCallId: string;
+  action: string;
+  kind: ActionKind;
+  input: unknown;
+  requiredPermissions: readonly string[];
+  grantedPermissions?: readonly string[];
+  messages: ReadonlyArray<ModelMessage>;
+  agent: Think;
+  env: Cloudflare.Env;
+}
+
+export interface ActionApprovalDescriptor {
+  requestId: string;
+  toolCallId: string;
+  action: string;
+  summary: string;
+  input: unknown;
+  permissions: string[];
+  risk?: "low" | "medium" | "high";
+  kind: "approval-gated" | "durable-pause";
+}
+
+/**
+ * A single approval awaiting a human decision, unified across pause backends so
+ * dashboards/voice/messenger can list and reconcile everything pending with one
+ * call. `source: "action"` is a parked `kind: "durable-pause"` action;
+ * `source: "codemode"` is a paused `execute`-tool execution. Both resolve via
+ * {@link Think.approveExecution} / {@link Think.rejectExecution}.
+ */
+export interface PendingApproval {
+  executionId: string;
+  source: "action" | "codemode";
+  descriptor: ActionApprovalDescriptor;
+}
+
+export interface ActionConfig<
+  InputSchema extends FlexibleSchema = FlexibleSchema,
+  Output = unknown
+> {
+  /** Defaults to the registration key when returned from getActions(). */
+  name?: string;
+  description: string;
+  inputSchema: InputSchema;
+  /** Reserved metadata; output validation is not enforced yet. */
+  outputSchema?: FlexibleSchema<Output>;
+  /**
+   * Stable key used to replay settled action results without re-running side
+   * effects. Use domain identifiers that survive recovery retries (for example,
+   * an order id or inbound event id); avoid request ids, timestamps, and random
+   * values.
+   */
+  idempotencyKey?: ActionIdempotencyKey<InferSchema<InputSchema>>;
+  permissions?: ActionPermissionSpec<InferSchema<InputSchema>>;
+  approval?: ActionApprovalPolicy<InferSchema<InputSchema>>;
+  approvalSummary?: string;
+  approvalRisk?: "low" | "medium" | "high";
+  timeoutMs?: number;
+  kind?: ActionKind;
+  execute(
+    input: InferSchema<InputSchema>,
+    ctx: ActionContext
+  ): Promise<Output> | Output;
+}
+
+export interface Action<
+  InputSchema extends FlexibleSchema = FlexibleSchema,
+  Output = unknown
+> {
+  readonly [ACTION_BRAND]: true;
+  readonly config: ActionConfig<InputSchema, Output>;
+}
+
+export function action<
+  const InputSchema extends FlexibleSchema,
+  Output = unknown
+>(config: ActionConfig<InputSchema, Output>): Action<InputSchema, Output> {
+  if (config.kind === "durable-pause" && config.approval === false) {
+    throw new Error(
+      `Action "${config.name ?? "(anonymous)"}": kind "durable-pause" with ` +
+        `approval: false never parks for approval, defeating the purpose. ` +
+        `Use kind "server" for an inline action, or omit approval (or set a ` +
+        `predicate) to gate when it parks.`
+    );
+  }
+  const descriptor: Action<InputSchema, Output> = {
+    [ACTION_BRAND]: true,
+    config: Object.freeze({ ...config })
+  };
+  return Object.freeze(descriptor);
+}
+
+export function isAction(value: unknown): value is Action {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { [ACTION_BRAND]?: unknown })[ACTION_BRAND] === true
+  );
+}
+
+type CompiledActionMetadata = {
+  actionName: string;
+  summary: string;
+  permissions?: string[];
+  risk?: "low" | "medium" | "high";
+  kind: "approval-gated" | "durable-pause";
+};
+
+type NormalizedActionAuthorization = {
+  allowed: boolean;
+  reason?: string;
+  grantedPermissions?: readonly string[];
+};
+
+type TurnTrigger =
+  | "ws-chat"
+  | "rpc"
+  | "programmatic"
+  | "submission"
+  | "scheduled"
+  | "agent-tool"
+  | "auto-continuation"
+  | "recovery-continue"
+  | "recovery-retry";
+
+type TurnAdmission = "queue" | "submit" | "execute-submission";
+
+type AdmittedQueueResult<T> =
+  | { status: "completed"; value: T }
+  | { status: "stale" };
+
+type QueueTurnSpec<T> = {
+  admission: "queue";
+  trigger: TurnTrigger;
+  requestId: string;
+  generation?: number;
+  continuation?: boolean;
+  allowNested?: boolean;
+  channel?: string;
+  onQueued?: () => void;
+  getStatus?: () => string | undefined;
+  execute: () => Promise<T>;
+};
+
+type NonQueueTurnSpec<T> = {
+  admission: Exclude<TurnAdmission, "queue">;
+  trigger: TurnTrigger;
+  channel?: string;
+  execute: () => Promise<T>;
+};
+
+type TurnSpec<T> = QueueTurnSpec<T> | NonQueueTurnSpec<T>;
+
+const admittedTurnContext = new AsyncLocalStorage<{
+  agent: unknown;
+  requestId: string;
+}>();
 
 /** Options for {@link Think.addMessages}. */
 export interface AddMessagesOptions {
@@ -841,6 +1357,28 @@ export interface AddMessagesOptions {
    * live view is intentionally not touched until the next turn's sync.
    */
   broadcast?: boolean;
+}
+
+/** Options for {@link Think.deliverNotice}. */
+export interface DeliverNoticeOptions {
+  /**
+   * Target channel id. Defaults to the active turn's channel, else `"web"`.
+   */
+  channel?: string;
+  /**
+   * Also record the notice in the model-visible transcript so the next turn
+   * knows it was said. Default `false`. For the `web` channel the note is always
+   * appended to the transcript (its only render path); `informModel` then only
+   * controls the phrasing.
+   */
+  informModel?: boolean;
+  /** Delivery kind for the wire tag. Default `"notice"`. */
+  kind?: DeliveryKind;
+  /**
+   * Conversation/thread hint, required for out-of-turn delivery to a
+   * multi-thread messenger channel.
+   */
+  thread?: string;
 }
 
 type AgentToolChildRunStatus =
@@ -983,6 +1521,130 @@ type DeclaredScheduledTaskRow = {
   updated_at: number;
 };
 
+type ActionLedgerStatus = "pending" | "settled";
+
+type ActionLedgerRow = {
+  key: string;
+  action_name: string;
+  request_id: string | null;
+  tool_call_id: string | null;
+  input_hash: string;
+  status: ActionLedgerStatus;
+  result_json: string | null;
+  created_at: number;
+  updated_at: number;
+};
+
+type ActionLedgerClaim =
+  | { outcome: "claimed" }
+  | { outcome: "replay"; row: ActionLedgerRow }
+  | { outcome: "pending"; row: ActionLedgerRow }
+  | { outcome: "reclaimed"; row: ActionLedgerRow }
+  | { outcome: "conflict"; row: ActionLedgerRow };
+
+type ActionLedgerRetentionConfig = {
+  settledMs: number | false;
+  pendingMs: number | false;
+  maxSweepRows: number;
+};
+
+type ActionLedgerSweepStatus = Extract<
+  ActionLedgerStatus,
+  "pending" | "settled"
+>;
+
+type ActionLedgerEvent =
+  | {
+      type: "action:ledger:replayed";
+      payload: { action: string; key: string; inputHash: string };
+    }
+  | {
+      type: "action:ledger:pending";
+      payload: { action: string; key: string; inputHash: string };
+    }
+  | {
+      type: "action:ledger:conflict";
+      payload: { action: string; key: string; inputHash: string };
+    }
+  | {
+      type: "action:ledger:serialize_failed";
+      payload: { action: string; key: string };
+    }
+  | {
+      type: "action:ledger:settled";
+      payload: { action: string; key: string; inputHash: string };
+    }
+  | {
+      type: "action:ledger:reclaimed";
+      payload: {
+        action: string;
+        key: string;
+        inputHash: string;
+        ageMs: number;
+      };
+    }
+  | {
+      type: "action:ledger:swept";
+      payload: { settled: number; pending: number };
+    };
+
+type ChannelEvent =
+  | {
+      type: "channel:resolved";
+      payload: { channel: string; kind: string; requestId?: string };
+    }
+  | {
+      type: "channel:delivered";
+      payload: { channel: string; kind: DeliveryKind; turnEnded: boolean };
+    }
+  | {
+      type: "notice:delivered";
+      payload: { channel: string; kind: DeliveryKind; informModel: boolean };
+    }
+  | {
+      type: "notice:failed";
+      payload: { channel: string; error: string };
+    };
+
+/**
+ * A durably-parked `kind: "durable-pause"` action awaiting human approval. The
+ * row is the compaction-safe record of everything needed to run `execute` on
+ * approve (the transcript part can be summarized away before approval), so it
+ * carries the action name, the model's input, and the approval descriptor.
+ */
+type ActionPendingRow = {
+  execution_id: string;
+  action_name: string;
+  tool_call_id: string;
+  request_id: string | null;
+  input_json: string;
+  descriptor_json: string | null;
+  created_at: number;
+};
+
+type ActionPauseEvent =
+  | {
+      type: "action:pause:created";
+      payload: { action: string; executionId: string; toolCallId: string };
+    }
+  | {
+      type: "action:pause:approved";
+      payload: { action: string; executionId: string };
+    }
+  | {
+      type: "action:pause:rejected";
+      payload: { action: string; executionId: string };
+    }
+  | {
+      type: "action:pause:swept";
+      payload: { swept: number };
+    };
+
+type ActionReplyEvent = {
+  type: "action:reply-attached";
+  payload: { action?: string; attachmentType: string };
+};
+
 type DeclaredScheduledTaskPayload = {
   taskId: string;
   scheduleHash: string;
@@ -1016,6 +1678,8 @@ export type SubmitMessagesOptions = {
   submissionId?: string;
   idempotencyKey?: string;
   metadata?: Record<string, unknown>;
+  /** Channel id this submission belongs to. See {@link RunTurnBase.channel}. */
+  channel?: string;
 };
 
 type ThinkWorkflowPromptContext = {
@@ -1639,8 +2303,6 @@ export interface ExtensionConfig {
   source: string;
 }
 
-const TIMED_OUT = Symbol("timed-out");
-
 /**
  * An opinionated chat agent base class.
  *
@@ -1798,7 +2460,24 @@ export class Think<
 
   private _activeMessengerContext?: MessengerContext;
 
+  /**
+   * Turn-scoped channel context (superset of `_activeMessengerContext`). Set on
+   * both the queue and submit admission paths via `_withChannelContext`, read by
+   * `deliverNotice` and per-channel policy. Save/restore keeps nested turns safe.
+   */
+  private _activeChannelContext?: ChannelContext;
+
+  /**
+   * Live delivery surface for the active turn, bound by `deliverMessengerReply`
+   * so `deliverNotice` can post to the originating channel mid-turn. Save/restore
+   * keeps nested turns safe.
+   */
+  private _activeDeliverySurface?: MessengerDeliverySurface;
+
   private _messengerRuntime?: ThinkMessengerRuntime;
+
+  /** Resolved channel registry (implicit web + configureChannels + messengers). */
+  private _channels?: Map<string, NormalizedChannelDefinition>;
 
   /**
    * WorkerLoader binding for sandboxed extensions.
@@ -1933,7 +2612,7 @@ export class Think<
       this._restoreClientTools();
       this._restoreBody();
       this._setupProtocolHandlers();
-      this._initializeMessengers();
+      await this._initializeChannels();
 
       // 8. User's onStart
       await _onStart();
@@ -1956,6 +2635,8 @@ export class Think<
       await this._runBestEffortOnStartStep(
         "durable-work-recovery",
         async () => {
+          await this._sweepActionLedger();
+          await this._sweepActionPendingApprovals();
           await this._recoverSubmissionsOnStart();
           this._recoverWorkflowNotifications();
           if (this._hasPendingSubmissions()) {
@@ -2639,13 +3320,19 @@ export class Think<
   private _lastClientTools: ClientToolSchema[] | undefined;
   private _lastBody: Record<string, unknown> | undefined;
   private _continuation = new ContinuationState<Connection>();
-  private _continuationTimer: ReturnType<typeof setTimeout> | null = null;
-  // True while a continuation is draining the in-flight tool-result/approval
-  // applies on the parallel-tool-batch barrier (#1649 / #1650). Prevents a
-  // second drain (and a double-fire) when more results arrive mid-drain — a
-  // sibling that re-arms the coalesce timer during a drain is absorbed by the
-  // in-progress drain rather than starting its own.
-  private _continuationBarrierActive = false;
+  // Shared auto-continuation barrier (#1649 / #1650): owns the coalesce timer
+  // and the double-fire guard. Parameterized by this agent's stream-active
+  // signal, apply-drain, and continuation-turn pipeline (`_fireAutoContinuation`).
+  private _autoContinuation = new AutoContinuationController<Connection>({
+    continuation: this._continuation,
+    generateRequestId: () => crypto.randomUUID(),
+    isStreamActive: () => this._streamingAssistant !== null,
+    hasPendingInteraction: () => this._pendingInteractionPromise !== null,
+    hasIncompleteToolBatch: () => this._hasIncompleteToolBatch(),
+    drainInteractionApplies: () => this._drainInteractionApplies(),
+    keepAliveWhile: <T>(fn: () => Promise<T>) => this.keepAliveWhile(fn),
+    fire: () => this._fireAutoContinuation()
+  });
   private _insideResponseHook = false;
   private _insideInferenceLoop = false;
   private _pendingInteractionPromise: Promise<boolean> | null = null;
@@ -2691,6 +3378,8 @@ export class Think<
   private _submissionTableEnsured = false;
   private _workflowNotificationTableEnsured = false;
   private _declaredScheduledTasksTableEnsured = false;
+  private _actionLedgerTableEnsured = false;
+  private _actionPendingTableEnsured = false;
   private _drainingSubmissions = false;
   private _drainingWorkflowNotifications = false;
   private _submissionAbortControllers = new Map<string, AbortController>();
@@ -2701,53 +3390,19 @@ export class Think<
     msg: string | ArrayBuffer | ArrayBufferView,
     without?: string[]
   ): void {
-    // Inspect frames while any agent-tool run is in flight (live sequences
-    // exist for the run's whole lifecycle), not only while a tailer is
-    // attached — error capture must not depend on tailer timing (#1575).
+    // Cheap idle guard so the common (no agent-tool child) broadcast path stays
+    // allocation-free — only build the snoop hooks while a run is in flight.
     if (
-      (this._agentToolForwarders.size > 0 ||
-        this._agentToolLiveSequences.size > 0) &&
-      typeof msg === "string"
+      this._agentToolForwarders.size > 0 ||
+      this._agentToolLiveSequences.size > 0
     ) {
-      try {
-        const parsed = JSON.parse(msg) as {
-          type?: unknown;
-          body?: unknown;
-          error?: unknown;
-          id?: unknown;
-        };
-        if (
-          parsed.type === MSG_CHAT_RESPONSE &&
-          typeof parsed.id === "string"
-        ) {
-          // A frame belongs to a run iff it carries that run's turn request
-          // id. Frames from unrelated turns (a user-driven turn on this
-          // agent, or another run's turn) resolve to a different — or no —
-          // run and are left alone, so concurrent runs cannot
-          // cross-contaminate each other's progress or error state (#1575).
-          const runId = this._agentToolRunForRequest(parsed.id);
-          if (runId !== null) {
-            if (parsed.error === true && typeof parsed.body === "string") {
-              this._agentToolLastErrors.set(runId, parsed.body);
-            } else if (
-              typeof parsed.body === "string" &&
-              parsed.body.length > 0
-            ) {
-              // Advance the live sequence even with no tailer attached so a
-              // tailer registering mid-run resumes at the right offset.
-              const sequence = this._agentToolLiveSequences.get(runId) ?? 0;
-              this._agentToolLiveSequences.set(runId, sequence + 1);
-              const chunk = { sequence, body: parsed.body };
-              const forwarders = this._agentToolForwarders.get(runId);
-              if (forwarders) {
-                for (const forward of forwarders) forward(chunk);
-              }
-            }
-          }
-        }
-      } catch {
-        // Non-chat frames pass through unchanged.
-      }
+      interceptAgentToolBroadcast(msg, {
+        forwarders: this._agentToolForwarders,
+        liveSequences: this._agentToolLiveSequences,
+        lastErrors: this._agentToolLastErrors,
+        responseType: MSG_CHAT_RESPONSE,
+        runForRequest: (requestId) => this._agentToolRunForRequest(requestId)
+      });
     }
     super.broadcast(msg, without);
   }
@@ -2922,8 +3577,25 @@ export class Think<
     return {};
   }
 
+  /** Return action descriptors compiled into tools for the assistant. */
+  getActions(): Record<string, Action> | Promise<Record<string, Action>> {
+    return {};
+  }
+
   /** Return messenger integrations that should be routed through this Think agent. */
   getMessengers(): ThinkMessengers {
+    return {};
+  }
+
+  /**
+   * Return the channels for this agent. Wraps (does not supersede)
+   * {@link getMessengers}: the implicit `web` channel is always present, each
+   * messenger from `getMessengers()` is absorbed as a `kind: "messenger"`
+   * channel, and these entries add `web`/`voice`/`custom` surfaces plus
+   * per-channel policy. A channel id that collides with a `getMessengers()` id
+   * is an error.
+   */
+  configureChannels(): ThinkChannels | Promise<ThinkChannels> {
     return {};
   }
 
@@ -2947,24 +3619,258 @@ export class Think<
     const previous = this._activeMessengerContext;
     this._activeMessengerContext = context;
     try {
-      await this.chat(userMessage, callback, options);
+      await this.chat(userMessage, callback, {
+        ...options,
+        channel: context.messengerId
+      });
     } finally {
       this._activeMessengerContext = previous;
     }
   }
 
-  private _initializeMessengers(): void {
+  /**
+   * Bind the live messenger delivery surface for the active turn so
+   * `deliverNotice` can post to the originating channel while a messenger turn
+   * is running. Returns a restore function; save/restore keeps nested turns
+   * safe. Called by `deliverMessengerReply`.
+   */
+  bindActiveDeliverySurface(surface: MessengerDeliverySurface): () => void {
+    const previous = this._activeDeliverySurface;
+    this._activeDeliverySurface = surface;
+    return () => {
+      this._activeDeliverySurface = previous;
+    };
+  }
+
+  /**
+   * The channel context for the active turn, if the turn resolved to a channel.
+   * Readable from tools/hooks during a turn (e.g. to branch on `kind`).
+   */
+  get activeChannel(): ChannelContext | undefined {
+    return this._activeChannelContext;
+  }
+
+  /** Resolve a channel id to a turn-scoped {@link ChannelContext}, if registered. */
+  private _resolveChannelContext(
+    channel: string | undefined
+  ): ChannelContext | undefined {
+    if (!channel) {
+      return undefined;
+    }
+    const definition = this._channels?.get(channel);
+    if (!definition) {
+      // A channel was requested but is not registered. Don't throw (a recovered
+      // turn may name a channel later removed from `configureChannels()`), but
+      // warn so a typo'd channel id is visible rather than silently policy-free.
+      // `_channels` is undefined for sub-agents (no channel registry), where a
+      // missing channel is expected, so only warn once the registry exists.
+      if (this._channels) {
+        console.warn(
+          `[Think] turn requested channel "${channel}" which is not registered ` +
+            `(configureChannels()/getMessengers()); no per-channel policy applied`
+        );
+      }
+      return undefined;
+    }
+    this._emitChannelEvent({
+      type: "channel:resolved",
+      payload: {
+        channel,
+        kind: definition.kind,
+        requestId: admittedTurnContext.getStore()?.requestId
+      }
+    });
+    return {
+      channelId: channel,
+      kind: definition.kind,
+      capabilities: definition.capabilities,
+      messenger:
+        definition.kind === "messenger" ? this.getMessengerContext() : undefined
+    };
+  }
+
+  /**
+   * Run `fn` with the turn-scoped channel context set for `channel`. No-op (just
+   * runs `fn`) when the channel is unset or unregistered. Save/restore keeps
+   * nested turns safe — mirrors `chatWithMessengerContext`.
+   */
+  private async _withChannelContext<T>(
+    channel: string | undefined,
+    fn: () => Promise<T>
+  ): Promise<T> {
+    const context = this._resolveChannelContext(channel);
+    if (!context) {
+      return fn();
+    }
+    const previous = this._activeChannelContext;
+    this._activeChannelContext = context;
+    try {
+      return await fn();
+    } finally {
+      this._activeChannelContext = previous;
+    }
+  }
+
+  /**
+   * Stamp the channel id onto user messages so a recovered/continued turn can
+   * re-resolve the channel from durable history.
+   */
+  private _stampChannel(
+    messages: UIMessage[],
+    channel: string | undefined
+  ): UIMessage[] {
+    if (!channel) {
+      return messages;
+    }
+    return messages.map((message) =>
+      message.role === "user"
+        ? {
+            ...message,
+            metadata: {
+              ...(message.metadata as Record<string, unknown> | undefined),
+              channel
+            }
+          }
+        : message
+    );
+  }
+
+  /** The channel stamped on the latest user message in the given list, if any. */
+  private _channelFromMessages(messages: UIMessage[]): string | undefined {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i];
+      if (message.role === "user") {
+        const channel = (message.metadata as { channel?: unknown } | undefined)
+          ?.channel;
+        return typeof channel === "string" ? channel : undefined;
+      }
+    }
+    return undefined;
+  }
+
+  /** Re-resolve the channel for a continuation from the latest user message. */
+  private _channelFromLatestUserMessage(): string | undefined {
+    return this._channelFromMessages(this.messages);
+  }
+
+  /**
+   * Deliver a no-turn, channel-routed message — a deterministic status, fallback,
+   * or notice — straight to the channel's delivery surface WITHOUT invoking the
+   * model and WITHOUT opening a recovery incident.
+   *
+   * Routing precedence for the target channel: explicit `options.channel` → the
+   * active turn's channel → `"web"`. The `web` channel renders via the transcript
+   * (its only client render path), so a web notice is always transcript-visible;
+   * messenger/voice deliver out of band and only touch the transcript when
+   * `informModel: true`.
+   *
+   * Like `addMessages`, this bypasses the turn queue and is safe to call from
+   * inside a tool `execute` without deadlocking.
+   */
+  async deliverNotice(
+    text: string | { markdown: string },
+    options?: DeliverNoticeOptions
+  ): Promise<void> {
+    const informModel = options?.informModel ?? false;
+    const kind: DeliveryKind = options?.kind ?? "notice";
+    const plain = typeof text === "string" ? text : text.markdown;
+    const annotated = `[Delivered to the user out of band] ${plain}`;
+    const channelId = options?.channel ?? this._activeChannelId() ?? "web";
+
+    try {
+      if (channelId === "web") {
+        await this.addMessages([
+          this._noticeMessage(informModel ? annotated : plain, kind)
+        ]);
+      } else {
+        const surface =
+          this._activeDeliverySurface ??
+          (await this._messengerRuntime?.resolveDeliverySurface(
+            channelId,
+            options?.thread
+          ));
+        if (!surface) {
+          const kindOf = this._channels?.get(channelId)?.kind;
+          let hint: string;
+          if (kindOf === undefined) {
+            hint = `; channel "${channelId}" is not registered`;
+          } else if (kindOf === "messenger") {
+            hint = options?.thread
+              ? ` (thread "${options.thread}")`
+              : "; pass { thread } for out-of-turn messenger notices";
+          } else {
+            hint = `; channel kind "${kindOf}" has no out-of-turn delivery surface yet`;
+          }
+          throw new Error(
+            `deliverNotice: cannot resolve a delivery surface for channel "${channelId}"${hint}`
+          );
+        }
+        await surface.post(
+          typeof text === "string" ? text : { markdown: text.markdown }
+        );
+        if (informModel) {
+          await this.addMessages([this._noticeMessage(annotated, kind)]);
+        }
+      }
+      this._emitChannelEvent({
+        type: "notice:delivered",
+        payload: { channel: channelId, kind, informModel }
+      });
+    } catch (error) {
+      this._emitChannelEvent({
+        type: "notice:failed",
+        payload: {
+          channel: channelId,
+          error: error instanceof Error ? error.message : String(error)
+        }
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * The active turn's channel id, if any. Prefers the turn-scoped channel
+   * context, then the active messenger turn's id; web turns have none, so
+   * `deliverNotice` defaults to `"web"`.
+   */
+  private _activeChannelId(): string | undefined {
+    return (
+      this._activeChannelContext?.channelId ??
+      this._activeMessengerContext?.messengerId
+    );
+  }
+
+  private _noticeMessage(
+    text: string,
+    kind: DeliveryKind = "notice"
+  ): UIMessage {
+    return {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      parts: [{ type: "text", text }],
+      metadata: { deliveryKind: kind }
+    };
+  }
+
+  private async _initializeChannels(): Promise<void> {
     if (this.parentPath.length > 0) {
       return;
     }
 
+    const configured = await this.configureChannels();
     const messengers = this.getMessengers();
-    if (Object.keys(messengers).length === 0) {
+    const { channels, messengers: messengerDefs } = resolveChannels(
+      configured,
+      messengers
+    );
+    this._channels = channels;
+
+    if (Object.keys(messengerDefs).length === 0) {
       return;
     }
 
     this._messengerRuntime = new ThinkMessengerRuntime(
-      messengers,
+      messengerDefs,
       this as unknown as MessengerThinkHost
     );
     this._messengerRuntime.initialize();
@@ -3098,6 +4004,43 @@ export class Think<
   maxSteps = 10;
 
   /**
+   * Retention window for settled action ledger rows. Deleting a row ends the
+   * idempotency guarantee for that key, so increase these windows for side
+   * effects whose downstream idempotency horizon is longer. Set a status to
+   * `false` to disable sweeping it.
+   */
+  actionLedgerRetention: ActionLedgerRetentionConfig = {
+    settledMs: 30 * 24 * 60 * 60 * 1000,
+    pendingMs: 90 * 24 * 60 * 60 * 1000,
+    maxSweepRows: 500
+  };
+
+  /**
+   * Lease window after which a durable `pending` action ledger row is assumed
+   * abandoned (its executor isolate died) and may be reclaimed and re-run.
+   * Reclaim re-runs `execute`, so it only applies to actions that declare an
+   * explicit `idempotencyKey` — that key is the developer's assertion that the
+   * keyed side effect is safe to retry. Fallback `tool:${toolCallId}` keys are
+   * never reclaimed. Set to `false` to disable stale-pending reclaim entirely
+   * (a stale row then blocks forever with `ActionPendingError`, the old
+   * behavior). This is a retry lease, not a retention window: retention answers
+   * "when may we delete old rows?"; the lease answers "when may we assume the
+   * previous executor died and retry safely?". Keep `actionLedgerRetention.pendingMs`
+   * well above this lease so reclaim happens before a sweep deletes the row.
+   */
+  actionLedgerPendingRetryLeaseMs: number | false = 5 * 60 * 1000;
+
+  /**
+   * Retention window for abandoned durable-pause approval rows — a
+   * `kind: "durable-pause"` action that parked but was never approved or
+   * rejected. Deleting a row makes that approval permanently unresolvable, so
+   * default generously: "approve days later from a dashboard" is the use case.
+   * Set to `false` to disable sweeping. Rows are deleted promptly on
+   * approve/reject regardless; this only bounds truly abandoned pauses.
+   */
+  actionPendingApprovalTtlMs: number | false = 30 * 24 * 60 * 60 * 1000;
+
+  /**
    * Whether reasoning chunks are sent to chat clients by default. Override
    * per turn by returning `sendReasoning` from `beforeTurn`.
    */
@@ -3196,6 +4139,25 @@ export class Think<
    * Turns are serialized, so a single value is safe.
    */
   private _activeTurnTools: ToolSet = {};
+  private _activeTurnActionMetadata = new Map<string, CompiledActionMetadata>();
+  private _activeTurnAuthorization: NormalizedActionAuthorization = {
+    allowed: true
+  };
+  private _activeTurnActionApprovalDescriptors = new Map<
+    string,
+    ActionApprovalDescriptor
+  >();
+  private _activeTurnApprovedActionInputs = new Map<string, unknown>();
+  private _activeActionLedgerExecutions = new Map<string, Promise<unknown>>();
+  /**
+   * Advisory reply attachments recorded by actions during the current admitted
+   * turn (see `ctx.attachReply`). Single-slot because turns are serialized.
+   * Reset at turn start in `_runInsideAdmittedTurnBody`; intentionally not
+   * cleared at turn end so `onChatResponse` and `replyAttachments()` can read
+   * it — the next turn's reset overwrites it.
+   */
+  private _activeTurnReplyAttachments: ReplyAttachment[] = [];
+  private _activeTurnReplyAttachmentsRequestId: string | undefined;
 
   /**
    * Number of times the proactive guard has compacted within the current
@@ -3352,6 +4314,64 @@ export class Think<
   beforeTurn(
     _ctx: TurnContext
   ): TurnConfig | void | Promise<TurnConfig | void> {}
+
+  /**
+   * Authorize action permissions for the current turn. Returning `true` grants
+   * all action permissions. Returning `grantedPermissions` limits the default
+   * `authorizeAction` implementation to that permission set.
+   */
+  authorizeTurn(
+    _ctx: TurnContext
+  ): ActionAuthorizationDecision | Promise<ActionAuthorizationDecision> {
+    return true;
+  }
+
+  /**
+   * Authorize a single action call after its model input and required
+   * permissions are known. Override this for app-specific policy; the default
+   * implementation enforces the grant returned from `authorizeTurn`.
+   */
+  authorizeAction(
+    ctx: ActionAuthorizationContext
+  ): ActionAuthorizationDecision | Promise<ActionAuthorizationDecision> {
+    const turnAuthorization = this._activeTurnAuthorization;
+    if (!turnAuthorization.allowed) {
+      return {
+        allowed: false,
+        reason: turnAuthorization.reason
+      };
+    }
+    if (turnAuthorization.grantedPermissions === undefined) {
+      return true;
+    }
+    const granted = new Set(turnAuthorization.grantedPermissions);
+    const missing = ctx.requiredPermissions.filter(
+      (permission) => !granted.has(permission)
+    );
+    if (missing.length === 0) return true;
+    return {
+      allowed: false,
+      reason: `Missing required permission: ${missing.join(", ")}`
+    };
+  }
+
+  /**
+   * Enrich the approval descriptor shown in approval UIs for a paused codemode
+   * `execute` execution. The default descriptor is derived from the first
+   * pending action as `connector.method` with its args as the input; override
+   * here to supply a human summary, the permissions it consumes, or a risk
+   * level (returned fields are merged over the derived defaults).
+   *
+   * Not called for `kind: "durable-pause"` actions — those carry their own
+   * descriptor from the `action()` config. Default returns `undefined` (use the
+   * derived descriptor).
+   */
+  describePausedExecution(
+    _pending: import("@cloudflare/codemode").PendingAction[],
+    _ctx: { requestId: string; toolCallId: string }
+  ): Partial<ActionApprovalDescriptor> | undefined {
+    return undefined;
+  }
 
   /**
    * Called before each AI SDK step in the agentic loop. Backed by
@@ -3835,6 +4855,9 @@ export class Think<
     // Reset the per-turn watchdog override; `beforeTurn` may set it below. A
     // turn that doesn't override falls back to the instance-level value.
     this._activeStallTimeoutMs = undefined;
+    this._activeTurnAuthorization = { allowed: true };
+    this._activeTurnApprovedActionInputs =
+      this._approvedActionInputsFromTranscript();
     // Reset the proactive-compaction cap for this streamText run.
     this._proactiveCompactionsThisRun = 0;
     if (this.waitForMcpConnections) {
@@ -3849,6 +4872,7 @@ export class Think<
       bash: this.workspaceBash
     });
     const baseTools = this.getTools();
+    const actionTools = await this._compileActionTools();
     const extensionTools = this.extensionManager?.getTools() ?? {};
     await this._refreshSkillsIfChanged();
     const contextTools = await this.session.tools();
@@ -3859,9 +4883,10 @@ export class Think<
         ? { execute: input.clientToolExecutor }
         : undefined
     );
-    const tools: ToolSet = {
+    let tools: ToolSet = {
       ...workspaceTools,
       ...baseTools,
+      ...actionTools,
       ...extensionTools,
       ...contextTools,
       ...skillTools,
@@ -3869,8 +4894,29 @@ export class Think<
       ...clientToolSet
     };
 
+    // Per-channel policy (overridable defaults applied BEFORE `beforeTurn`):
+    // narrow the tool set (the `config.tools` seam can only ADD, never remove)
+    // and prepend channel instructions to the base system prompt.
+    const channelContext = this._activeChannelContext;
+    const channelDefinition = channelContext
+      ? this._channels?.get(channelContext.channelId)
+      : undefined;
+    if (channelDefinition?.tools) {
+      tools = channelDefinition.tools(tools);
+    }
+
+    const channelInstructions =
+      channelDefinition?.instructions && channelContext
+        ? typeof channelDefinition.instructions === "function"
+          ? await channelDefinition.instructions(channelContext)
+          : channelDefinition.instructions
+        : undefined;
+
     const frozenPrompt = await this.session.freezeSystemPrompt();
-    const baseSystem = frozenPrompt || this.getSystemPrompt();
+    const rawBaseSystem = frozenPrompt || this.getSystemPrompt();
+    const baseSystem = channelInstructions
+      ? `${channelInstructions}\n\n${rawBaseSystem}`
+      : rawBaseSystem;
     const system = this._systemPromptForTurn(baseSystem, tools);
 
     const messages = await this._assembleModelMessages(tools);
@@ -3917,6 +4963,16 @@ export class Think<
     const mergedTools: ToolSet = config.tools
       ? { ...tools, ...config.tools }
       : tools;
+    const finalTurnContext: TurnContext = {
+      ...ctx,
+      system: finalSystem,
+      messages: finalMessages,
+      tools: mergedTools,
+      model: finalModel
+    };
+    this._activeTurnAuthorization = this._normalizeActionAuthorization(
+      await this.authorizeTurn(finalTurnContext)
+    );
     // Wrap each tool's `execute` so `beforeToolCall` is consulted before
     // the tool actually runs. The wrapped `execute` honors the returned
     // `ToolCallDecision` — `block` short-circuits with `reason`,
@@ -3952,7 +5008,11 @@ export class Think<
     this._turnModelMessageBaseline = finalMessages.length;
     this._activeTurnTools = mergedTools;
 
-    const finalMaxSteps = config.maxSteps ?? this.maxSteps;
+    // `maxTurns` is an overridable per-channel default: a user `beforeTurn`
+    // returning `maxSteps` still wins, then the channel cap, then the instance
+    // default.
+    const finalMaxSteps =
+      config.maxSteps ?? channelDefinition?.maxTurns ?? this.maxSteps;
     const finalSendReasoning = config.sendReasoning ?? this.sendReasoning;
     // Resolve the per-turn stall-watchdog override (explicit `0` = off for this
     // turn). Read by `_streamResult` / `_streamResultToRpcCallback` when arming
@@ -4169,6 +5229,523 @@ export class Think<
     return result;
   }
 
+  private _normalizeActionAuthorization(
+    decision: ActionAuthorizationDecision
+  ): NormalizedActionAuthorization {
+    if (typeof decision === "boolean") {
+      return { allowed: decision };
+    }
+    return {
+      allowed: decision.allowed,
+      ...(decision.reason !== undefined && { reason: decision.reason }),
+      ...(decision.grantedPermissions !== undefined && {
+        grantedPermissions: [...decision.grantedPermissions]
+      })
+    };
+  }
+
+  private _emitActionLedgerEvent(event: ActionLedgerEvent): void {
+    const emit = this._emit as unknown as (
+      type: string,
+      payload: Record<string, unknown>
+    ) => void;
+    emit.call(this, event.type, event.payload);
+  }
+
+  private _emitChannelEvent(event: ChannelEvent): void {
+    const emit = this._emit as unknown as (
+      type: string,
+      payload: Record<string, unknown>
+    ) => void;
+    emit.call(this, event.type, event.payload);
+  }
+
+  private _approvedActionInputsFromTranscript(): Map<string, unknown> {
+    const approved = new Map<string, unknown>();
+    for (const message of this.messages) {
+      for (const part of message.parts ?? []) {
+        if (typeof part !== "object" || part === null) continue;
+        const record = part as Record<string, unknown>;
+        const toolCallId =
+          typeof record.toolCallId === "string" ? record.toolCallId : undefined;
+        if (!toolCallId) continue;
+        const approval = record.approval as
+          | { approved?: unknown; descriptor?: unknown }
+          | undefined;
+        if (approval?.approved !== true) continue;
+        const descriptor = approval.descriptor as
+          | { input?: unknown; action?: unknown }
+          | undefined;
+        if (typeof descriptor?.action !== "string") continue;
+        approved.set(
+          toolCallId,
+          "input" in descriptor ? descriptor.input : record.input
+        );
+      }
+    }
+    return approved;
+  }
+
+  private async _resolveActionPermissions(
+    spec: ActionPermissionSpec<unknown> | undefined,
+    input: unknown,
+    ctx: ActionContext
+  ): Promise<string[]> {
+    if (spec === undefined) return [];
+    const policyCtx = this._actionContextWithoutReply(ctx);
+    const permissions =
+      typeof spec === "function" ? await spec({ input, ctx: policyCtx }) : spec;
+    return [...permissions];
+  }
+
+  private _actionContextWithoutReply(ctx: ActionContext): ActionContext {
+    return {
+      ...ctx,
+      attachReply: () => {}
+    };
+  }
+
+  private async _authorizeActionCall(options: {
+    actionName: string;
+    kind: ActionKind;
+    input: unknown;
+    ctx: ActionContext;
+    permissions?: ActionPermissionSpec<unknown>;
+  }): Promise<NormalizedActionAuthorization & { permissions: string[] }> {
+    const permissions = await this._resolveActionPermissions(
+      options.permissions,
+      options.input,
+      options.ctx
+    );
+    const decision = await this.authorizeAction({
+      requestId: options.ctx.requestId,
+      toolCallId: options.ctx.toolCallId,
+      action: options.actionName,
+      kind: options.kind,
+      input: options.input,
+      requiredPermissions: permissions,
+      grantedPermissions: this._activeTurnAuthorization.grantedPermissions,
+      messages: options.ctx.messages,
+      agent: this,
+      env: this.env as Cloudflare.Env
+    });
+    return {
+      ...this._normalizeActionAuthorization(decision),
+      permissions
+    };
+  }
+
+  private async _compileActionTools(): Promise<ToolSet> {
+    const actions = await this.getActions();
+    const tools: ToolSet = {};
+    this._activeTurnActionMetadata = new Map();
+    this._activeTurnActionApprovalDescriptors = new Map();
+    for (const [registrationName, descriptor] of Object.entries(actions)) {
+      if (!isAction(descriptor)) {
+        throw new Error(
+          `getActions() entry "${registrationName}" must be created with action().`
+        );
+      }
+      const toolName = descriptor.config.name ?? registrationName;
+      const kind =
+        descriptor.config.kind ??
+        (descriptor.config.approval ? "approval-gated" : "server");
+      if (kind === "approval-gated" || kind === "durable-pause") {
+        const staticPermissions = Array.isArray(descriptor.config.permissions)
+          ? [...descriptor.config.permissions]
+          : undefined;
+        this._activeTurnActionMetadata.set(toolName, {
+          actionName: toolName,
+          summary:
+            descriptor.config.approvalSummary ?? descriptor.config.description,
+          ...(staticPermissions !== undefined && {
+            permissions: staticPermissions
+          }),
+          ...(descriptor.config.approvalRisk !== undefined && {
+            risk: descriptor.config.approvalRisk
+          }),
+          kind
+        });
+      }
+      tools[toolName] = this._actionToTool(descriptor, toolName, kind);
+    }
+    return tools;
+  }
+
+  private _actionToTool(
+    descriptor: Action,
+    toolName: string,
+    kind: ActionKind
+  ): ToolSet[string] {
+    const config = descriptor.config;
+    const executeAction = config.execute as (
+      input: unknown,
+      ctx: ActionContext
+    ) => Promise<unknown> | unknown;
+    const approval = config.approval as
+      | ActionApprovalPolicy<unknown>
+      | undefined;
+    const permissions = config.permissions as
+      | ActionPermissionSpec<unknown>
+      | undefined;
+    const idempotencyKey = config.idempotencyKey as
+      | ActionIdempotencyKey<unknown>
+      | undefined;
+
+    return tool({
+      description: config.description,
+      metadata: {
+        cfThinkAction: true,
+        cfThinkActionApprovalConfigured:
+          approval !== undefined && kind !== "durable-pause"
+      },
+      inputSchema: config.inputSchema as never,
+      ...(approval !== undefined && kind !== "durable-pause"
+        ? {
+            needsApproval: async (
+              input: unknown,
+              options: {
+                toolCallId: string;
+                messages: ModelMessage[];
+              }
+            ) => {
+              const ctx: ActionContext = {
+                agent: this,
+                env: this.env as Cloudflare.Env,
+                requestId: admittedTurnContext.getStore()?.requestId ?? "",
+                toolCallId: options.toolCallId,
+                messages: options.messages,
+                signal: new AbortController().signal,
+                // No-op: approval/permission predicates must be pure and may
+                // run twice (prompt + resume). Attachments belong to execute.
+                attachReply: () => {}
+              };
+              if (
+                this._activeTurnApprovedActionInputs.has(options.toolCallId)
+              ) {
+                return true;
+              }
+              const authorization = await this._authorizeActionCall({
+                actionName: toolName,
+                kind,
+                input,
+                ctx,
+                permissions
+              });
+              if (!authorization.allowed) return false;
+              const needsApproval =
+                typeof approval === "function"
+                  ? await approval({ input, ctx })
+                  : approval;
+              if (needsApproval) {
+                this._activeTurnActionApprovalDescriptors.set(
+                  options.toolCallId,
+                  {
+                    requestId: ctx.requestId,
+                    toolCallId: options.toolCallId,
+                    action: toolName,
+                    summary: config.approvalSummary ?? config.description,
+                    input,
+                    permissions: authorization.permissions,
+                    ...(config.approvalRisk !== undefined && {
+                      risk: config.approvalRisk
+                    }),
+                    kind: "approval-gated"
+                  }
+                );
+              }
+              return needsApproval;
+            }
+          }
+        : {}),
+      execute: async (
+        input: unknown,
+        options: {
+          toolCallId?: string;
+          messages?: ModelMessage[];
+          abortSignal?: AbortSignal;
+        }
+      ): Promise<unknown> => {
+        const { signal, cleanup } = createActionAbortSignal(
+          options.abortSignal,
+          config.timeoutMs ?? DEFAULT_ACTION_TIMEOUT_MS
+        );
+        const requestId = admittedTurnContext.getStore()?.requestId ?? "";
+        const actionContext: ActionContext = {
+          agent: this,
+          env: this.env as Cloudflare.Env,
+          requestId,
+          toolCallId: options.toolCallId ?? "",
+          messages: options.messages ?? [],
+          signal,
+          attachReply: (attachment) =>
+            this._recordReplyAttachment(requestId, attachment, toolName)
+        };
+        const abortError = () =>
+          signal.reason instanceof Error
+            ? signal.reason
+            : new Error(
+                signal.reason ? String(signal.reason) : "Action aborted"
+              );
+        let onAbort: (() => void) | undefined;
+
+        try {
+          const authorization = await this._authorizeActionCall({
+            actionName: toolName,
+            kind,
+            input,
+            ctx: actionContext,
+            permissions
+          });
+          if (!authorization.allowed) {
+            return actionAuthorizationErrorEnvelope(
+              authorization.reason,
+              authorization.permissions
+            );
+          }
+          if (signal.aborted) throw abortError();
+          const abortPromise = new Promise<never>((_, reject) => {
+            onAbort = () => reject(abortError());
+            signal.addEventListener("abort", onAbort, { once: true });
+          });
+          const runAction = async () => {
+            const output = await Promise.race([
+              Promise.resolve(executeAction(input, actionContext)),
+              abortPromise
+            ]);
+            return prepareActionOutputForModel(output);
+          };
+
+          if (kind === "durable-pause") {
+            // The approval predicate gates whether to PARK (not whether an AI
+            // SDK approval is needed). Absent → always park; a function may opt
+            // a given input out of the human gate and run inline instead.
+            const shouldPark =
+              approval === undefined
+                ? true
+                : typeof approval === "function"
+                  ? await approval({
+                      input,
+                      ctx: this._actionContextWithoutReply(actionContext)
+                    })
+                  : approval;
+            if (!shouldPark) {
+              return await this._runLedgeredAction({
+                toolName,
+                idempotencyKey,
+                input,
+                ctx: actionContext,
+                runAction
+              });
+            }
+            return this._parkDurablePauseAction({
+              toolName,
+              input,
+              ctx: actionContext,
+              summary: config.approvalSummary ?? config.description,
+              permissions: authorization.permissions,
+              risk: config.approvalRisk
+            });
+          }
+
+          return await this._runLedgeredAction({
+            toolName,
+            idempotencyKey,
+            input,
+            ctx: actionContext,
+            runAction
+          });
+        } catch (error) {
+          return actionErrorEnvelope(error);
+        } finally {
+          if (onAbort) signal.removeEventListener("abort", onAbort);
+          cleanup();
+        }
+      }
+    });
+  }
+
+  /**
+   * Run an action's `execute` through the action ledger: same-isolate
+   * coalescing, durable claim/replay, settle-on-success, release-on-failure.
+   * Shared by the inline server-action path and the durable-pause-on-approve
+   * path so an action's side effect is replay-safe regardless of how it is
+   * dispatched. `runAction` must already apply timeout/abort and
+   * `prepareActionOutputForModel`.
+   */
+  private async _runLedgeredAction(args: {
+    toolName: string;
+    idempotencyKey: ActionIdempotencyKey<unknown> | undefined;
+    input: unknown;
+    ctx: ActionContext;
+    runAction: () => Promise<unknown>;
+  }): Promise<unknown> {
+    const { toolName, idempotencyKey, input, ctx, runAction } = args;
+
+    const ledgerKey = await this._resolveActionLedgerKey(
+      toolName,
+      idempotencyKey,
+      input,
+      this._actionContextWithoutReply(ctx)
+    );
+    if (!ledgerKey) {
+      const attachmentCount = this._activeTurnReplyAttachments.length;
+      try {
+        return await runAction();
+      } catch (error) {
+        this._activeTurnReplyAttachments.length = attachmentCount;
+        throw error;
+      }
+    }
+
+    const active = this._activeActionLedgerExecutions.get(ledgerKey);
+    if (active) {
+      return await active;
+    }
+
+    const inputHash = this._actionInputHash(input);
+    // An explicit `idempotencyKey` is the developer's assertion that retrying
+    // the keyed side effect is safe; only those rows are reclaimable when stale.
+    // Fallback `tool:${toolCallId}` keys stay conservative.
+    const hasExplicitIdempotencyKey = idempotencyKey !== undefined;
+    const claim = this._claimActionLedgerRow({
+      key: ledgerKey,
+      actionName: toolName,
+      requestId: ctx.requestId,
+      toolCallId: ctx.toolCallId,
+      inputHash,
+      retryablePending: hasExplicitIdempotencyKey,
+      leaseMs: this.actionLedgerPendingRetryLeaseMs
+    });
+    if (claim.outcome === "replay") {
+      this._emitActionLedgerEvent({
+        type: "action:ledger:replayed",
+        payload: { action: toolName, key: ledgerKey, inputHash }
+      });
+      return decodeActionLedgerOutput(claim.row.result_json);
+    }
+    if (claim.outcome === "pending") {
+      this._emitActionLedgerEvent({
+        type: "action:ledger:pending",
+        payload: { action: toolName, key: ledgerKey, inputHash }
+      });
+      return actionPendingErrorEnvelope();
+    }
+    if (claim.outcome === "conflict") {
+      this._emitActionLedgerEvent({
+        type: "action:ledger:conflict",
+        payload: { action: toolName, key: ledgerKey, inputHash }
+      });
+      return actionKeyConflictEnvelope(toolName, ledgerKey);
+    }
+    // `claimed` (fresh row) and `reclaimed` (stale row re-leased) both fall
+    // through to execution below; reclaim just re-runs the keyed side effect.
+    if (claim.outcome === "reclaimed") {
+      this._emitActionLedgerEvent({
+        type: "action:ledger:reclaimed",
+        payload: {
+          action: toolName,
+          key: ledgerKey,
+          inputHash,
+          ageMs: Date.now() - claim.row.updated_at
+        }
+      });
+    }
+
+    const attachmentCount = this._activeTurnReplyAttachments.length;
+    const execution = Promise.resolve().then(async () => {
+      try {
+        const prepared = await runAction();
+        const encoded = encodeActionLedgerOutput(prepared);
+        if (!encoded.ok) {
+          this._releaseActionLedgerRow(ledgerKey);
+          this._emitActionLedgerEvent({
+            type: "action:ledger:serialize_failed",
+            payload: { action: toolName, key: ledgerKey }
+          });
+          return prepared;
+        }
+        this._settleActionLedgerRow(ledgerKey, encoded.json);
+        this._emitActionLedgerEvent({
+          type: "action:ledger:settled",
+          payload: { action: toolName, key: ledgerKey, inputHash }
+        });
+        return encoded.value;
+      } catch (error) {
+        this._activeTurnReplyAttachments.length = attachmentCount;
+        throw error;
+      }
+    });
+    this._activeActionLedgerExecutions.set(ledgerKey, execution);
+    try {
+      return await execution;
+    } catch (error) {
+      this._releaseActionLedgerRow(ledgerKey);
+      return actionErrorEnvelope(error);
+    } finally {
+      this._activeActionLedgerExecutions.delete(ledgerKey);
+    }
+  }
+
+  /**
+   * Park a `kind: "durable-pause"` action for human approval. Persists a
+   * compaction-safe pending row (action name + model input + approval
+   * descriptor) so the approval survives history compaction, deploys, and
+   * isolate eviction, then returns the minimal model-visible paused output.
+   *
+   * The action's `execute` does NOT run here — it runs later in
+   * `approveExecution` via `_runLedgeredAction`, so the side effect is gated on
+   * human approval AND remains replay-safe. The rich descriptor lives on the
+   * row and on the transcript part, never embedded in the model-visible output.
+   */
+  private _parkDurablePauseAction(args: {
+    toolName: string;
+    input: unknown;
+    ctx: ActionContext;
+    summary: string;
+    permissions: string[];
+    risk?: "low" | "medium" | "high";
+  }): {
+    status: "paused";
+    executionId: string;
+    action: string;
+    message: string;
+  } {
+    const { toolName, input, ctx, summary, permissions, risk } = args;
+    const executionId = `${ACTION_PAUSE_ID_PREFIX}${crypto.randomUUID()}`;
+    const descriptor: ActionApprovalDescriptor = {
+      requestId: ctx.requestId,
+      toolCallId: ctx.toolCallId,
+      action: toolName,
+      summary,
+      input,
+      permissions,
+      ...(risk !== undefined && { risk }),
+      kind: "durable-pause"
+    };
+    this._insertActionPendingRow({
+      execution_id: executionId,
+      action_name: toolName,
+      tool_call_id: ctx.toolCallId,
+      request_id: ctx.requestId || null,
+      input_json: JSON.stringify(input),
+      descriptor_json: JSON.stringify(descriptor),
+      created_at: Date.now()
+    });
+    this._emitActionPauseEvent({
+      type: "action:pause:created",
+      payload: { action: toolName, executionId, toolCallId: ctx.toolCallId }
+    });
+    return {
+      status: "paused",
+      executionId,
+      action: toolName,
+      message:
+        "This action is awaiting human approval. Stop and wait for the " +
+        "approval result before proceeding."
+    };
+  }
+
   /** Default hook timeout in milliseconds. */
   hookTimeout = 5000;
 
@@ -4377,6 +5954,10 @@ export class Think<
       }
 
       const isDynamic = t.type === "dynamic";
+      const metadata = t.metadata as Record<string, unknown> | undefined;
+      const isApprovalConfiguredAction =
+        metadata?.cfThinkAction === true &&
+        metadata.cfThinkActionApprovalConfigured === true;
 
       const wrappedExecute = async (
         input: unknown,
@@ -4424,6 +6005,15 @@ export class Think<
         // Resolve the decision.
         if (!decision || decision.action === "allow") {
           const finalInput = decision?.input ?? input;
+          const approvedInput = isApprovalConfiguredAction
+            ? this._activeTurnApprovedActionInputs.get(options.toolCallId)
+            : undefined;
+          if (
+            approvedInput !== undefined &&
+            !stableJsonEqual(finalInput, approvedInput)
+          ) {
+            return actionApprovalInputErrorEnvelope();
+          }
           // Await before inspecting so we detect AsyncIterable returns
           // whether the original `execute` returned them directly (sync
           // function or `async function*`) or wrapped in a Promise (a
@@ -4611,6 +6201,105 @@ export class Think<
     };
   }
 
+  private async _admitTurn<T>(
+    spec: QueueTurnSpec<T>
+  ): Promise<AdmittedQueueResult<T>>;
+  private async _admitTurn<T>(spec: NonQueueTurnSpec<T>): Promise<T>;
+  private async _admitTurn<T>(
+    spec: TurnSpec<T>
+  ): Promise<AdmittedQueueResult<T> | T> {
+    if (spec.admission !== "queue") {
+      // The non-queue (submit/execute-submission) path runs `execute()` here
+      // directly — it does NOT pass through `_runInsideAdmittedTurnBody`, so the
+      // channel context must be set here too.
+      return this._withChannelContext(spec.channel, () => spec.execute());
+    }
+
+    if (!spec.allowNested) {
+      this._assertNotInsideAdmittedTurn(spec.trigger);
+    }
+
+    return this.keepAliveWhile(async () => {
+      const turnPromise = this._turnQueue.enqueue(
+        spec.requestId,
+        () => this._runInsideAdmittedTurnBody(spec),
+        spec.generation === undefined
+          ? undefined
+          : { generation: spec.generation }
+      );
+      spec.onQueued?.();
+      return turnPromise;
+    });
+  }
+
+  private _assertNotInsideAdmittedTurn(trigger: TurnTrigger): void {
+    if (admittedTurnContext.getStore()?.agent !== this) return;
+    throw new Error(
+      `Think turn admission (${trigger}) cannot be called from inside an active turn; use runTurn({ mode: "submit" }) or addMessages() instead`
+    );
+  }
+
+  private async _runInsideAdmittedTurnBody<T>(
+    spec: QueueTurnSpec<T>
+  ): Promise<T> {
+    return admittedTurnContext.run(
+      { agent: this, requestId: spec.requestId },
+      async () => {
+        const startedAt = Date.now();
+        this._emit("chat:turn:start", {
+          requestId: spec.requestId,
+          trigger: spec.trigger,
+          admission: spec.admission,
+          ...(spec.continuation !== undefined && {
+            continuation: spec.continuation
+          }),
+          ...(spec.generation !== undefined && { generation: spec.generation })
+        });
+
+        this._activeTurnReplyAttachments = [];
+        this._activeTurnReplyAttachmentsRequestId = spec.requestId;
+
+        try {
+          const value = await this._withChannelContext(spec.channel, () =>
+            spec.execute()
+          );
+          this._emit("chat:turn:finish", {
+            requestId: spec.requestId,
+            trigger: spec.trigger,
+            admission: spec.admission,
+            ...(spec.continuation !== undefined && {
+              continuation: spec.continuation
+            }),
+            ...(spec.generation !== undefined && {
+              generation: spec.generation
+            }),
+            status: spec.getStatus?.() ?? "completed",
+            durationMs: Date.now() - startedAt
+          });
+          return value;
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          this._emit("chat:turn:finish", {
+            requestId: spec.requestId,
+            trigger: spec.trigger,
+            admission: spec.admission,
+            ...(spec.continuation !== undefined && {
+              continuation: spec.continuation
+            }),
+            ...(spec.generation !== undefined && {
+              generation: spec.generation
+            }),
+            status: "error",
+            durationMs: Date.now() - startedAt,
+            error: message
+          });
+          throw error;
+        }
+      }
+    );
+  }
+
   // ── Sub-agent RPC entry point ───────────────────────────────────
 
   /**
@@ -4663,9 +6352,14 @@ export class Think<
 
     try {
       await callback.onStart({ requestId });
-      await this.keepAliveWhile(async () => {
-        await this._turnQueue.enqueue(requestId, async () => {
-          const userMsg: UIMessage =
+      await this._admitTurn({
+        admission: "queue",
+        trigger: "rpc",
+        requestId,
+        continuation: false,
+        channel: options?.channel,
+        execute: async () => {
+          const baseUserMsg: UIMessage =
             typeof userMessage === "string"
               ? {
                   id: crypto.randomUUID(),
@@ -4673,6 +6367,10 @@ export class Think<
                   parts: [{ type: "text", text: userMessage }]
                 }
               : userMessage;
+          const userMsg = this._stampChannel(
+            [baseUserMsg],
+            options?.channel
+          )[0];
 
           await this._appendMessageToHistory(userMsg);
           this._broadcastMessages();
@@ -4761,12 +6459,245 @@ export class Think<
           } else {
             await chatBody();
           }
-        });
+        }
       });
     } finally {
       detachExternal();
       this._aborts.remove(requestId);
     }
+  }
+
+  /**
+   * Unified turn admission API (Turns RFC, step 2).
+   *
+   * Thin facade over {@link Think.saveMessages}, {@link Think.continueLastTurn},
+   * {@link Think.submitMessages}, and {@link Think.chat}. Each `mode` delegates
+   * to the matching backing method with a narrowed option surface; the full
+   * unified superset lands with `_admitTurn` (step 3).
+   *
+   * - `mode: "wait"` (default) — blocking turn; returns {@link TurnResult}.
+   * - `mode: "submit"` — durable queued turn; returns {@link SubmitMessagesResult}.
+   * - `mode: "stream"` — RPC-style streaming; returns `Promise<void>`.
+   *
+   * **Re-entrancy.** Calling `mode: "wait"` or `continuation: true` from inside
+   * an active turn (a tool `execute`, a lifecycle hook) deadlocks on the turn
+   * queue — identical to calling {@link Think.saveMessages} or
+   * {@link Think.continueLastTurn} from there. Prefer `mode: "submit"` or
+   * {@link Think.addMessages} instead. Precise nested-call detection is deferred
+   * to `_admitTurn` (step 3).
+   *
+   * **Empty input (`wait`).** String, single-message, and array inputs that
+   * normalize to an empty list short-circuit to `{ status: "skipped" }` without
+   * running inference. A function `input` that resolves to `[]` at run time is
+   * not pre-checked (the function must see the in-queue transcript); step 3's
+   * `_admitTurn` centralizes empty-skip inside the queue.
+   *
+   * @experimental
+   */
+  runTurn(options: RunTurnWait): Promise<TurnResult>;
+  runTurn(options: RunTurnSubmit): Promise<SubmitMessagesResult>;
+  runTurn(options: RunTurnStream): Promise<void>;
+  async runTurn(
+    options: RunTurnOptions
+  ): Promise<TurnResult | SubmitMessagesResult | void> {
+    const mode = this._resolveRunTurnMode(options);
+    if (mode === "stream") {
+      return this._runTurnStream(options as RunTurnStream);
+    }
+    if (mode === "submit") {
+      return this._runTurnSubmit(options as RunTurnSubmit);
+    }
+    return this._runTurnWait(options as RunTurnWait);
+  }
+
+  private _resolveRunTurnMode(
+    options: RunTurnOptions
+  ): "wait" | "submit" | "stream" {
+    if (options === null || typeof options !== "object") {
+      throw new TypeError("runTurn: options must be an object");
+    }
+
+    const mode = (options as { mode?: unknown }).mode;
+    if (mode === undefined || mode === "wait") return "wait";
+    if (mode === "submit" || mode === "stream") return mode;
+    throw new TypeError('runTurn: mode must be "wait", "submit", or "stream"');
+  }
+
+  private _validateRunTurnAdmission(
+    options: RunTurnOptions,
+    mode: "wait" | "submit" | "stream"
+  ): void {
+    const hasInput = options.input !== undefined;
+    const continuation =
+      mode === "wait" && (options as RunTurnWait).continuation === true;
+
+    if (mode !== "wait" && (options as RunTurnWait).continuation === true) {
+      throw new TypeError(
+        'runTurn: continuation is only supported with mode: "wait"'
+      );
+    }
+
+    if (mode === "stream" && !(options as RunTurnStream).callback) {
+      throw new TypeError('runTurn: mode "stream" requires callback');
+    }
+
+    if (mode === "wait") {
+      if (hasInput && continuation) {
+        throw new TypeError(
+          "runTurn: supply either input or continuation: true, not both"
+        );
+      }
+      if (!hasInput && !continuation) {
+        throw new TypeError(
+          "runTurn: supply either input or continuation: true"
+        );
+      }
+      return;
+    }
+
+    if (!hasInput) {
+      throw new TypeError(`runTurn: mode "${mode}" requires input`);
+    }
+  }
+
+  private _userMessageFromText(text: string): UIMessage {
+    return {
+      id: crypto.randomUUID(),
+      role: "user",
+      parts: [{ type: "text", text }]
+    };
+  }
+
+  private _normalizeRunTurnMessages(
+    input: Exclude<
+      TurnInputMessages,
+      (current: UIMessage[]) => UIMessage[] | Promise<UIMessage[]>
+    >
+  ): UIMessage[] {
+    if (typeof input === "string") {
+      if (input.length === 0) return [];
+      return [this._userMessageFromText(input)];
+    }
+    if (Array.isArray(input)) {
+      return input;
+    }
+    return [input];
+  }
+
+  private _assertRunTurnSubmitInput(
+    input: TurnInputMessages
+  ): asserts input is string | UIMessage | UIMessage[] {
+    if (typeof input === "function") {
+      throw new Error(
+        'runTurn({ mode: "submit" }) does not support function input until _admitTurn (step 3)'
+      );
+    }
+  }
+
+  private _assertRunTurnStreamInput(
+    input: TurnInputMessages
+  ): asserts input is string | UIMessage {
+    if (typeof input === "function") {
+      throw new Error(
+        'runTurn({ mode: "stream" }) does not support function input until _admitTurn (step 3)'
+      );
+    }
+    if (Array.isArray(input)) {
+      throw new Error(
+        'runTurn({ mode: "stream" }) does not support array input until _admitTurn (step 3)'
+      );
+    }
+  }
+
+  private async _enrichTurnResult(
+    result: SaveMessagesResult,
+    continuation: boolean
+  ): Promise<TurnResult> {
+    let message: SessionMessage | undefined;
+    if (result.status === "completed") {
+      const leaf = await this.session.getLatestLeaf();
+      if (leaf?.role === "assistant") {
+        message = leaf;
+      }
+    }
+    return { ...result, continuation, message };
+  }
+
+  private async _runTurnWait(options: RunTurnWait): Promise<TurnResult> {
+    this._validateRunTurnAdmission(options, "wait");
+
+    if (options.continuation === true) {
+      const result = await this.continueLastTurn(options.body, {
+        signal: options.signal,
+        channel: options.channel
+      });
+      return this._enrichTurnResult(result, true);
+    }
+
+    const input = options.input;
+    if (input === undefined) {
+      throw new TypeError("runTurn: supply either input or continuation: true");
+    }
+
+    if (typeof input === "function") {
+      const result = await this._runProgrammaticMessagesTurn(
+        crypto.randomUUID(),
+        input,
+        { signal: options.signal, channel: options.channel }
+      );
+      return this._enrichTurnResult(result, false);
+    }
+
+    const messages = this._normalizeRunTurnMessages(input);
+    if (messages.length === 0) {
+      return { requestId: "", status: "skipped", continuation: false };
+    }
+
+    const result = await this._runProgrammaticMessagesTurn(
+      crypto.randomUUID(),
+      messages,
+      { signal: options.signal, channel: options.channel }
+    );
+    return this._enrichTurnResult(result, false);
+  }
+
+  private async _runTurnSubmit(
+    options: RunTurnSubmit
+  ): Promise<SubmitMessagesResult> {
+    this._validateRunTurnAdmission(options, "submit");
+
+    const input = options.input;
+    if (input === undefined) {
+      throw new TypeError('runTurn: mode "submit" requires input');
+    }
+
+    this._assertRunTurnSubmitInput(input);
+    const messages = this._normalizeRunTurnMessages(input);
+    return this.submitMessages(messages, {
+      submissionId: options.submissionId,
+      idempotencyKey: options.idempotencyKey,
+      metadata: options.metadata,
+      channel: options.channel
+    });
+  }
+
+  private async _runTurnStream(options: RunTurnStream): Promise<void> {
+    this._validateRunTurnAdmission(options, "stream");
+
+    const input = options.input;
+    if (input === undefined) {
+      throw new TypeError('runTurn: mode "stream" requires input');
+    }
+
+    this._assertRunTurnStreamInput(input);
+    const userMessage = input;
+
+    return this.chat(userMessage, options.callback, {
+      signal: options.signal,
+      clientTools: options.clientTools,
+      onClientToolCall: options.onClientToolCall,
+      channel: options.channel
+    });
   }
 
   // ── Message access ──────────────────────────────────────────────
@@ -4923,7 +6854,8 @@ export class Think<
           requestId,
           [this.formatAgentToolInput(input)],
           {
-            signal: controller.signal
+            signal: controller.signal,
+            trigger: "agent-tool"
           }
         );
         const streamId =
@@ -5036,26 +6968,10 @@ export class Think<
    * resolving the interrupted turn; `exhausted`/`failed` mean it gave up; a
    * completed recovery deletes its incident.
    */
-  private async _classifyAgentToolChildRecovery(): Promise<
+  private _classifyAgentToolChildRecovery(): Promise<
     "in-progress" | "failed" | "none"
   > {
-    const entries = await this.ctx.storage.list<ChatRecoveryIncident>({
-      prefix: CHAT_RECOVERY_INCIDENT_KEY_PREFIX
-    });
-    let failed = false;
-    for (const incident of entries.values()) {
-      if (
-        incident.status === "detected" ||
-        incident.status === "scheduled" ||
-        incident.status === "attempting"
-      ) {
-        return "in-progress";
-      }
-      if (incident.status === "exhausted" || incident.status === "failed") {
-        failed = true;
-      }
-    }
-    return failed ? "failed" : "none";
+    return classifyAgentToolChildRecovery(this.ctx.storage);
   }
 
   async inspectAgentToolRun(
@@ -5331,6 +7247,437 @@ export class Think<
       if (text.length > 0) return text;
     }
     return null;
+  }
+
+  // ── Action ledger ────────────────────────────────────────────────
+
+  private _ensureActionLedgerTable(): void {
+    if (this._actionLedgerTableEnsured) return;
+    this.sql`
+      CREATE TABLE IF NOT EXISTS cf_think_action_ledger (
+        key TEXT PRIMARY KEY,
+        action_name TEXT NOT NULL,
+        request_id TEXT,
+        tool_call_id TEXT,
+        input_hash TEXT NOT NULL,
+        status TEXT NOT NULL,
+        result_json TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `;
+    this.sql`
+      CREATE INDEX IF NOT EXISTS cf_think_action_ledger_sweep
+      ON cf_think_action_ledger (status, updated_at)
+    `;
+    this._actionLedgerTableEnsured = true;
+  }
+
+  private _readActionLedgerRow(key: string): ActionLedgerRow | null {
+    this._ensureActionLedgerTable();
+    const rows = this.sql<ActionLedgerRow>`
+      SELECT key, action_name, request_id, tool_call_id, input_hash, status,
+             result_json, created_at, updated_at
+      FROM cf_think_action_ledger
+      WHERE key = ${key}
+      LIMIT 1
+    `;
+    return rows[0] ?? null;
+  }
+
+  /**
+   * Claim a ledger key for execution. Read-then-write with no `await` between
+   * the read and any write, so within the single DO isolate two claims cannot
+   * interleave — the same race-free idiom documented on
+   * {@link _claimActionPendingRow}. The only way a durable `pending` row
+   * outlives its writer is a crashed prior isolate, which has no live writer to
+   * race; that is the row a stale reclaim safely re-runs.
+   */
+  private _claimActionLedgerRow(options: {
+    key: string;
+    actionName: string;
+    requestId: string;
+    toolCallId: string;
+    inputHash: string;
+    retryablePending: boolean;
+    leaseMs: number | false;
+    now?: number;
+  }): ActionLedgerClaim {
+    this._ensureActionLedgerTable();
+    const now = options.now ?? Date.now();
+    const existing = this._readActionLedgerRow(options.key);
+    if (existing) {
+      if (
+        existing.action_name !== options.actionName ||
+        existing.input_hash !== options.inputHash
+      ) {
+        return { outcome: "conflict", row: existing };
+      }
+      if (existing.status === "settled") {
+        return { outcome: "replay", row: existing };
+      }
+      // `pending` from here. Reclaim only an explicit-key row whose lease has
+      // expired; fresh rows, fallback keys, and a disabled lease still block.
+      const stale =
+        options.retryablePending &&
+        options.leaseMs !== false &&
+        now - existing.updated_at > options.leaseMs;
+      if (!stale) {
+        return { outcome: "pending", row: existing };
+      }
+      this.sql`
+        UPDATE cf_think_action_ledger
+        SET request_id = ${options.requestId || null},
+            tool_call_id = ${options.toolCallId || null},
+            updated_at = ${now}
+        WHERE key = ${options.key} AND status = ${"pending"}
+      `;
+      return { outcome: "reclaimed", row: existing };
+    }
+
+    this.sql`
+      INSERT INTO cf_think_action_ledger (
+        key, action_name, request_id, tool_call_id, input_hash, status,
+        result_json, created_at, updated_at
+      )
+      VALUES (
+        ${options.key}, ${options.actionName}, ${options.requestId || null},
+        ${options.toolCallId || null}, ${options.inputHash}, ${"pending"},
+        ${null}, ${now}, ${now}
+      )
+    `;
+    return { outcome: "claimed" };
+  }
+
+  private _settleActionLedgerRow(key: string, resultJson: string): void {
+    this._ensureActionLedgerTable();
+    this.sql`
+      UPDATE cf_think_action_ledger
+      SET status = ${"settled"},
+          result_json = ${resultJson},
+          updated_at = ${Date.now()}
+      WHERE key = ${key}
+    `;
+  }
+
+  private _releaseActionLedgerRow(key: string): void {
+    this._ensureActionLedgerTable();
+    this.sql`
+      DELETE FROM cf_think_action_ledger
+      WHERE key = ${key}
+    `;
+  }
+
+  private async _resolveActionLedgerKey(
+    actionName: string,
+    spec: ActionIdempotencyKey<unknown> | undefined,
+    input: unknown,
+    ctx: ActionContext
+  ): Promise<string | null> {
+    if (spec !== undefined) {
+      const key =
+        typeof spec === "function" ? await spec({ input, ctx }) : spec;
+      if (key.length === 0) {
+        throw new Error(
+          `Action "${actionName}" returned an empty idempotency key`
+        );
+      }
+      return `action:${actionName}:${key}`;
+    }
+    return ctx.toolCallId ? `tool:${ctx.toolCallId}` : null;
+  }
+
+  private _actionInputHash(input: unknown): string {
+    return stableHash(input);
+  }
+
+  private _actionLedgerRetentionForStatus(
+    status: ActionLedgerSweepStatus
+  ): number | false {
+    return status === "settled"
+      ? this.actionLedgerRetention.settledMs
+      : this.actionLedgerRetention.pendingMs;
+  }
+
+  private _deleteActionLedgerRows(keys: string[]): number {
+    let deleted = 0;
+    for (let i = 0; i < keys.length; i += MAX_BOUND_PARAMS) {
+      const batch = keys.slice(i, i + MAX_BOUND_PARAMS);
+      const strings = buildInClauseStrings(
+        "DELETE FROM cf_think_action_ledger WHERE key IN ",
+        batch.length
+      );
+      this.sql(strings, ...batch);
+      deleted += batch.length;
+    }
+    return deleted;
+  }
+
+  private _sweepActionLedgerStatus(
+    status: ActionLedgerSweepStatus,
+    now: number,
+    limit: number
+  ): number {
+    const retentionMs = this._actionLedgerRetentionForStatus(status);
+    if (retentionMs === false || limit <= 0) return 0;
+    const cutoff = now - retentionMs;
+    const rows = this.sql<{ key: string }>`
+      SELECT key
+      FROM cf_think_action_ledger
+      WHERE status = ${status}
+        AND updated_at < ${cutoff}
+      ORDER BY updated_at ASC
+      LIMIT ${limit}
+    `;
+    return this._deleteActionLedgerRows(rows.map((row) => row.key));
+  }
+
+  private async _sweepActionLedger(options?: {
+    force?: boolean;
+  }): Promise<{ settled: number; pending: number }> {
+    this._ensureActionLedgerTable();
+    const now = Date.now();
+    if (!options?.force) {
+      const lastSwept =
+        (await this.ctx.storage.get<number>(ACTION_LEDGER_LAST_SWEPT_KEY)) ?? 0;
+      if (now - lastSwept < ACTION_LEDGER_SWEEP_INTERVAL_MS) {
+        return { settled: 0, pending: 0 };
+      }
+    }
+
+    const maxSweepRows = Math.max(
+      0,
+      Math.floor(this.actionLedgerRetention.maxSweepRows)
+    );
+    const settled = this._sweepActionLedgerStatus("settled", now, maxSweepRows);
+    const pending = this._sweepActionLedgerStatus(
+      "pending",
+      now,
+      Math.max(0, maxSweepRows - settled)
+    );
+    await this.ctx.storage.put(ACTION_LEDGER_LAST_SWEPT_KEY, now);
+    this._emitActionLedgerEvent({
+      type: "action:ledger:swept",
+      payload: { settled, pending }
+    });
+    return { settled, pending };
+  }
+
+  // ── Durable-pause action approvals ──────────────────────────────
+
+  private _emitActionReplyEvent(event: ActionReplyEvent): void {
+    const emit = this._emit as unknown as (
+      type: string,
+      payload: Record<string, unknown>
+    ) => void;
+    emit.call(this, event.type, event.payload);
+  }
+
+  /**
+   * Record an advisory reply attachment for the active turn. Advisory: a
+   * non-object, a missing/non-string `type`, or exceeding the per-turn cap is
+   * silently ignored. The attachment is JSON-normalized to a safe copy so a
+   * later mutation of the caller's object can't corrupt it and downstream
+   * persistence/RPC can't choke on bigint/circular values.
+   */
+  private _recordReplyAttachment(
+    requestId: string,
+    attachment: unknown,
+    actionName?: string
+  ): void {
+    if (!requestId || requestId !== this._activeTurnReplyAttachmentsRequestId) {
+      return;
+    }
+    if (
+      typeof attachment !== "object" ||
+      attachment === null ||
+      Array.isArray(attachment) ||
+      typeof (attachment as { type?: unknown }).type !== "string"
+    ) {
+      return;
+    }
+    if (
+      this._activeTurnReplyAttachments.length >= MAX_REPLY_ATTACHMENTS_PER_TURN
+    ) {
+      return;
+    }
+    const serialized = safeStringifyActionOutput(attachment);
+    if (serialized.error || serialized.value === undefined) {
+      return;
+    }
+    const normalized = JSON.parse(serialized.value) as unknown;
+    if (
+      typeof normalized !== "object" ||
+      normalized === null ||
+      Array.isArray(normalized) ||
+      typeof (normalized as { type?: unknown }).type !== "string"
+    ) {
+      return;
+    }
+    this._activeTurnReplyAttachments.push(normalized as ReplyAttachment);
+    this._emitActionReplyEvent({
+      type: "action:reply-attached",
+      payload: {
+        ...(actionName !== undefined && { action: actionName }),
+        attachmentType: (normalized as { type: string }).type
+      }
+    });
+  }
+
+  private _cloneReplyAttachment(attachment: ReplyAttachment): ReplyAttachment {
+    return JSON.parse(JSON.stringify(attachment)) as ReplyAttachment;
+  }
+
+  /**
+   * Advisory reply attachments recorded during a turn via `ctx.attachReply`.
+   * Returns deep copies. With no `requestId`, returns the most recent turn's
+   * attachments; with a `requestId`, returns them only if they belong to that
+   * turn (else `[]`).
+   */
+  replyAttachments(requestId?: string): ReplyAttachment[] {
+    if (
+      requestId !== undefined &&
+      requestId !== this._activeTurnReplyAttachmentsRequestId
+    ) {
+      return [];
+    }
+    return this._activeTurnReplyAttachments.map((attachment) =>
+      this._cloneReplyAttachment(attachment)
+    );
+  }
+
+  private _emitActionPauseEvent(event: ActionPauseEvent): void {
+    const emit = this._emit as unknown as (
+      type: string,
+      payload: Record<string, unknown>
+    ) => void;
+    emit.call(this, event.type, event.payload);
+  }
+
+  private _ensureActionPendingTable(): void {
+    if (this._actionPendingTableEnsured) return;
+    this.sql`
+      CREATE TABLE IF NOT EXISTS cf_think_action_pending_approvals (
+        execution_id TEXT PRIMARY KEY,
+        action_name TEXT NOT NULL,
+        tool_call_id TEXT NOT NULL,
+        request_id TEXT,
+        input_json TEXT NOT NULL,
+        descriptor_json TEXT,
+        created_at INTEGER NOT NULL
+      )
+    `;
+    this.sql`
+      CREATE INDEX IF NOT EXISTS cf_think_action_pending_created
+      ON cf_think_action_pending_approvals (created_at)
+    `;
+    this._actionPendingTableEnsured = true;
+  }
+
+  private _readActionPendingRow(executionId: string): ActionPendingRow | null {
+    this._ensureActionPendingTable();
+    const rows = this.sql<ActionPendingRow>`
+      SELECT execution_id, action_name, tool_call_id, request_id, input_json,
+             descriptor_json, created_at
+      FROM cf_think_action_pending_approvals
+      WHERE execution_id = ${executionId}
+      LIMIT 1
+    `;
+    return rows[0] ?? null;
+  }
+
+  private _insertActionPendingRow(row: ActionPendingRow): void {
+    this._ensureActionPendingTable();
+    this.sql`
+      INSERT INTO cf_think_action_pending_approvals (
+        execution_id, action_name, tool_call_id, request_id, input_json,
+        descriptor_json, created_at
+      )
+      VALUES (
+        ${row.execution_id}, ${row.action_name}, ${row.tool_call_id},
+        ${row.request_id}, ${row.input_json}, ${row.descriptor_json},
+        ${row.created_at}
+      )
+    `;
+  }
+
+  /**
+   * Atomically claim a pending-approval row for resolution: read it, then
+   * delete it. SQLite calls are synchronous and there is no `await` between the
+   * read and the delete, so within the single DO isolate this is race-free — a
+   * concurrent `approveExecution`/`rejectExecution` for the same id can only run
+   * at an await boundary, by which point the row is already gone (it sees
+   * `null` → "already resolved"). The returned row is the caller's to resolve.
+   */
+  private _claimActionPendingRow(executionId: string): ActionPendingRow | null {
+    this._ensureActionPendingTable();
+    const row = this._readActionPendingRow(executionId);
+    if (!row) return null;
+    this.sql`
+      DELETE FROM cf_think_action_pending_approvals
+      WHERE execution_id = ${executionId}
+    `;
+    return row;
+  }
+
+  private _listActionPendingRows(): ActionPendingRow[] {
+    this._ensureActionPendingTable();
+    return this.sql<ActionPendingRow>`
+      SELECT execution_id, action_name, tool_call_id, request_id, input_json,
+             descriptor_json, created_at
+      FROM cf_think_action_pending_approvals
+      ORDER BY created_at ASC
+    `;
+  }
+
+  private _deleteActionPendingRows(executionIds: string[]): number {
+    let deleted = 0;
+    for (let i = 0; i < executionIds.length; i += MAX_BOUND_PARAMS) {
+      const batch = executionIds.slice(i, i + MAX_BOUND_PARAMS);
+      const strings = buildInClauseStrings(
+        "DELETE FROM cf_think_action_pending_approvals WHERE execution_id IN ",
+        batch.length
+      );
+      this.sql(strings, ...batch);
+      deleted += batch.length;
+    }
+    return deleted;
+  }
+
+  private async _sweepActionPendingApprovals(options?: {
+    force?: boolean;
+  }): Promise<{ swept: number }> {
+    this._ensureActionPendingTable();
+    const ttl = this.actionPendingApprovalTtlMs;
+    if (ttl === false) return { swept: 0 };
+    const now = Date.now();
+    if (!options?.force) {
+      const lastSwept =
+        (await this.ctx.storage.get<number>(ACTION_PENDING_LAST_SWEPT_KEY)) ??
+        0;
+      if (now - lastSwept < ACTION_PENDING_SWEEP_INTERVAL_MS) {
+        return { swept: 0 };
+      }
+    }
+    const cutoff = now - ttl;
+    const rows = this.sql<{ execution_id: string }>`
+      SELECT execution_id
+      FROM cf_think_action_pending_approvals
+      WHERE created_at < ${cutoff}
+      ORDER BY created_at ASC
+      LIMIT 500
+    `;
+    const swept = this._deleteActionPendingRows(
+      rows.map((row) => row.execution_id)
+    );
+    await this.ctx.storage.put(ACTION_PENDING_LAST_SWEPT_KEY, now);
+    if (swept > 0) {
+      this._emitActionPauseEvent({
+        type: "action:pause:swept",
+        payload: { swept }
+      });
+    }
+    return { swept };
   }
 
   // ── Declarative scheduled tasks ─────────────────────────────────
@@ -6381,66 +8728,73 @@ export class Think<
     messages: UIMessage[],
     options?: SubmitMessagesOptions
   ): Promise<SubmitMessagesResult> {
-    this._ensureSubmissionTable();
-    if (messages.length === 0) {
-      throw new Error("submitMessages requires at least one message");
-    }
+    // Persist the channel on the user messages so the drained turn re-resolves
+    // it from history (the model turn runs later in the submission drain).
+    messages = this._stampChannel(messages, options?.channel);
+    return this._admitTurn({
+      admission: "submit",
+      trigger: "submission",
+      execute: async () => {
+        this._ensureSubmissionTable();
+        if (messages.length === 0) {
+          throw new Error("submitMessages requires at least one message");
+        }
 
-    const existingById = options?.submissionId
-      ? this._readSubmission(options.submissionId)
-      : null;
-    const existingByKey = options?.idempotencyKey
-      ? this._readSubmissionByIdempotencyKey(options.idempotencyKey)
-      : null;
+        const existingById = options?.submissionId
+          ? this._readSubmission(options.submissionId)
+          : null;
+        const existingByKey = options?.idempotencyKey
+          ? this._readSubmissionByIdempotencyKey(options.idempotencyKey)
+          : null;
 
-    if (
-      existingById &&
-      existingByKey &&
-      existingById.submission_id !== existingByKey.submission_id
-    ) {
-      throw new Error(
-        "submissionId and idempotencyKey refer to different submissions"
-      );
-    }
-    if (
-      existingByKey &&
-      options?.submissionId &&
-      existingByKey.submission_id !== options.submissionId
-    ) {
-      throw new Error(
-        "submissionId and idempotencyKey refer to different submissions"
-      );
-    }
-    if (
-      existingById &&
-      options?.idempotencyKey &&
-      existingById.idempotency_key !== null &&
-      existingById.idempotency_key !== options.idempotencyKey
-    ) {
-      throw new Error(
-        "submissionId and idempotencyKey refer to different submissions"
-      );
-    }
+        if (
+          existingById &&
+          existingByKey &&
+          existingById.submission_id !== existingByKey.submission_id
+        ) {
+          throw new Error(
+            "submissionId and idempotencyKey refer to different submissions"
+          );
+        }
+        if (
+          existingByKey &&
+          options?.submissionId &&
+          existingByKey.submission_id !== options.submissionId
+        ) {
+          throw new Error(
+            "submissionId and idempotencyKey refer to different submissions"
+          );
+        }
+        if (
+          existingById &&
+          options?.idempotencyKey &&
+          existingById.idempotency_key !== null &&
+          existingById.idempotency_key !== options.idempotencyKey
+        ) {
+          throw new Error(
+            "submissionId and idempotencyKey refer to different submissions"
+          );
+        }
 
-    const existing = existingById ?? existingByKey;
-    if (existing) {
-      if (existing.status === "pending") {
-        await this._scheduleSubmissionDrain();
-        this._startSubmissionDrain();
-      }
-      return {
-        ...this._inspectionFromSubmissionRow(existing),
-        accepted: false
-      };
-    }
+        const existing = existingById ?? existingByKey;
+        if (existing) {
+          if (existing.status === "pending") {
+            await this._scheduleSubmissionDrain();
+            this._startSubmissionDrain();
+          }
+          return {
+            ...this._inspectionFromSubmissionRow(existing),
+            accepted: false
+          };
+        }
 
-    const submissionId = options?.submissionId ?? crypto.randomUUID();
-    const requestId = submissionId;
-    const now = Date.now();
-    const messagesJson = this._serializeSubmissionMessages(messages);
-    const metadataJson = this._serializeMetadata(options?.metadata);
+        const submissionId = options?.submissionId ?? crypto.randomUUID();
+        const requestId = submissionId;
+        const now = Date.now();
+        const messagesJson = this._serializeSubmissionMessages(messages);
+        const metadataJson = this._serializeMetadata(options?.metadata);
 
-    this.sql`
+        this.sql`
       INSERT INTO cf_think_submissions (
         submission_id, idempotency_key, request_id, stream_id, status,
         messages_json, metadata_json, error_message, created_at,
@@ -6453,24 +8807,26 @@ export class Think<
       )
     `;
 
-    const row = this._readSubmission(submissionId);
-    if (!row) {
-      throw new Error("Failed to persist submission");
-    }
+        const row = this._readSubmission(submissionId);
+        if (!row) {
+          throw new Error("Failed to persist submission");
+        }
 
-    this._emit("submission:create", {
-      submissionId: row.submission_id,
-      requestId: row.request_id ?? undefined,
-      idempotencyKey: row.idempotency_key ?? undefined
+        this._emit("submission:create", {
+          submissionId: row.submission_id,
+          requestId: row.request_id ?? undefined,
+          idempotencyKey: row.idempotency_key ?? undefined
+        });
+        await this._emitSubmissionStatus(row);
+        await this._scheduleSubmissionDrain();
+        this._startSubmissionDrain();
+
+        return {
+          ...this._inspectionFromSubmissionRow(row),
+          accepted: true
+        };
+      }
     });
-    await this._emitSubmissionStatus(row);
-    await this._scheduleSubmissionDrain();
-    this._startSubmissionDrain();
-
-    return {
-      ...this._inspectionFromSubmissionRow(row),
-      accepted: true
-    };
   }
 
   private async _scheduleSubmissionDrain(): Promise<void> {
@@ -6525,6 +8881,14 @@ export class Think<
   }
 
   private async _runSubmission(row: ThinkSubmissionRow): Promise<void> {
+    await this._admitTurn({
+      admission: "execute-submission",
+      trigger: "submission",
+      execute: () => this._executeSubmission(row)
+    });
+  }
+
+  private async _executeSubmission(row: ThinkSubmissionRow): Promise<void> {
     const requestId = row.request_id ?? row.submission_id;
     const startedAt = Date.now();
     this.sql`
@@ -6552,6 +8916,7 @@ export class Think<
         messages,
         {
           signal: controller.signal,
+          trigger: "submission",
           captureProgrammaticStreamError: true,
           captureOutput: Boolean(workflowPrompt?.output),
           workflowPrompt: workflowPrompt ?? undefined,
@@ -6976,18 +9341,33 @@ export class Think<
       body?: Record<string, unknown>;
       workflowPrompt?: ThinkWorkflowPromptContext;
       shouldApplyMessages?: () => boolean | Promise<boolean>;
+      trigger?: TurnTrigger;
+      channel?: string;
     }
   ): Promise<ProgrammaticMessagesResult> {
     const clientTools = this._lastClientTools;
     const body = options?.body ?? this._lastBody;
     const epoch = this._turnQueue.generation;
+    // Explicit channel wins; otherwise re-resolve from persisted user-message
+    // metadata (covers the submission drain replaying stamped messages).
+    const channel =
+      options?.channel ??
+      (Array.isArray(messages)
+        ? this._channelFromMessages(messages)
+        : undefined);
     let status: SaveMessagesResult["status"] = "completed";
     let error: string | undefined;
     let output: unknown;
     let wasAborted = false;
 
-    await this.keepAliveWhile(async () => {
-      await this._turnQueue.enqueue(requestId, async () => {
+    await this._admitTurn({
+      admission: "queue",
+      trigger: options?.trigger ?? "programmatic",
+      requestId,
+      continuation: false,
+      channel,
+      getStatus: () => status,
+      execute: async () => {
         if (this._turnQueue.generation !== epoch) {
           status = "skipped";
           return;
@@ -7019,7 +9399,7 @@ export class Think<
           return;
         }
 
-        for (const msg of resolved) {
+        for (const msg of this._stampChannel(resolved, channel)) {
           await this._appendMessageToHistory(msg);
         }
         options?.onMessagesApplied?.();
@@ -7131,7 +9511,7 @@ export class Think<
           detachExternal();
           this._aborts.remove(requestId);
         }
-      });
+      }
     });
 
     if (
@@ -7170,8 +9550,10 @@ export class Think<
    */
   protected async continueLastTurn(
     body?: Record<string, unknown>,
-    options?: SaveMessagesOptions
+    options?: SaveMessagesOptions & { trigger?: TurnTrigger; channel?: string }
   ): Promise<SaveMessagesResult> {
+    const trigger = options?.trigger ?? "programmatic";
+    this._assertNotInsideAdmittedTurn(trigger);
     const lastLeaf = await this.session.getLatestLeaf();
     if (!lastLeaf || lastLeaf.role !== "assistant") {
       return { requestId: "", status: "skipped" };
@@ -7181,12 +9563,21 @@ export class Think<
     const clientTools = this._lastClientTools;
     const resolvedBody = body ?? this._lastBody;
     const epoch = this._turnQueue.generation;
+    // Re-resolve the channel from durable history so a continued/recovered turn
+    // re-applies per-channel policy.
+    const channel = options?.channel ?? this._channelFromLatestUserMessage();
     let status: SaveMessagesResult["status"] = "completed";
     let error: string | undefined;
     let wasAborted = false;
 
-    await this.keepAliveWhile(async () => {
-      await this._turnQueue.enqueue(requestId, async () => {
+    await this._admitTurn({
+      admission: "queue",
+      trigger,
+      requestId,
+      continuation: true,
+      channel,
+      getStatus: () => status,
+      execute: async () => {
         if (this._turnQueue.generation !== epoch) {
           status = "skipped";
           return;
@@ -7239,7 +9630,7 @@ export class Think<
           detachExternal();
           this._aborts.remove(requestId);
         }
-      });
+      }
     });
 
     if (
@@ -7257,8 +9648,10 @@ export class Think<
   private async _retryLastUserTurn(
     clientTools?: ClientToolSchema[],
     body?: Record<string, unknown>,
-    options?: SaveMessagesOptions
+    options?: SaveMessagesOptions & { trigger?: TurnTrigger }
   ): Promise<SaveMessagesResult> {
+    const trigger = options?.trigger ?? "recovery-retry";
+    this._assertNotInsideAdmittedTurn(trigger);
     const lastLeaf = await this.session.getLatestLeaf();
     if (!lastLeaf || lastLeaf.role !== "user") {
       return { requestId: "", status: "skipped" };
@@ -7270,8 +9663,13 @@ export class Think<
     let error: string | undefined;
     let wasAborted = false;
 
-    await this.keepAliveWhile(async () => {
-      await this._turnQueue.enqueue(requestId, async () => {
+    await this._admitTurn({
+      admission: "queue",
+      trigger,
+      requestId,
+      continuation: false,
+      getStatus: () => status,
+      execute: async () => {
         if (this._turnQueue.generation !== epoch) {
           status = "skipped";
           return;
@@ -7321,7 +9719,7 @@ export class Think<
           detachExternal();
           this._aborts.remove(requestId);
         }
-      });
+      }
     });
 
     if (
@@ -7647,9 +10045,14 @@ export class Think<
       const abortSignal = this._aborts.getSignal(requestId);
 
       await this.keepAliveWhile(async () => {
-        const turnPromise = this._turnQueue.enqueue(
+        const turnPromise = this._admitTurn({
+          admission: "queue",
+          trigger: "ws-chat",
           requestId,
-          async () => {
+          generation: epoch,
+          continuation: false,
+          onQueued: releaseIfPending,
+          execute: async () => {
             // Superseded by a later overlapping submit (latest/merge/debounce)
             if (
               this._submitConcurrency.isSuperseded(
@@ -7771,12 +10174,8 @@ export class Think<
             } else {
               await chatTurnBody();
             }
-          },
-          {
-            generation: epoch
           }
-        );
-        releaseIfPending();
+        });
 
         const turnResult = await turnPromise;
 
@@ -7842,10 +10241,10 @@ export class Think<
     ).catch((error) => {
       console.error("[Think] Failed to skip pending submissions", error);
     });
-    if (this._continuationTimer) {
-      clearTimeout(this._continuationTimer);
-      this._continuationTimer = null;
-    }
+    // Tear down the event-driven auto-continuation barrier (#1650): cancel the
+    // coalesce timer and clear the double-fire guard so a reset mid-park can't
+    // leave a stale flag pinning future continuations.
+    this._autoContinuation.reset();
     this._submitConcurrency.reset();
     this._pendingInteractionPromise = null;
     // Drop the apply chain so new interactions don't serialize behind a stale
@@ -7854,7 +10253,6 @@ export class Think<
     // The streaming turn (if any) is being torn down; stop exposing its
     // accumulator so a late tool result doesn't apply to an abandoned message.
     this._streamingAssistant = null;
-    this._continuationBarrierActive = false;
     this._continuation.sendResumeNone();
     this._continuation.clearAll();
   }
@@ -7947,6 +10345,203 @@ export class Think<
     }
   }
 
+  private _annotateActionApprovalChunk(
+    requestId: string,
+    chunk: StreamChunkData,
+    pendingActionCalls: Map<
+      string,
+      { toolName: string; input: unknown | undefined }
+    >,
+    parts?: UIMessage["parts"]
+  ): StreamChunkData {
+    const toolCallId =
+      typeof chunk.toolCallId === "string"
+        ? chunk.toolCallId
+        : typeof chunk.id === "string"
+          ? chunk.id
+          : undefined;
+
+    if (toolCallId) {
+      if (
+        (chunk.type === "tool-input-start" ||
+          chunk.type === "tool-input-available" ||
+          chunk.type === "tool-call") &&
+        typeof chunk.toolName === "string"
+      ) {
+        const previous = pendingActionCalls.get(toolCallId);
+        pendingActionCalls.set(toolCallId, {
+          toolName: chunk.toolName,
+          input:
+            "input" in chunk
+              ? normalizeToolInput(chunk.input).input
+              : previous?.input
+        });
+      } else if ("input" in chunk) {
+        const previous = pendingActionCalls.get(toolCallId);
+        if (previous) {
+          pendingActionCalls.set(toolCallId, {
+            ...previous,
+            input: normalizeToolInput(chunk.input).input
+          });
+        }
+      }
+    }
+
+    // A durable pause (durable-pause action OR codemode execution) surfaces as
+    // a `tool-output-available` chunk whose output is `status: "paused"`, NOT a
+    // `tool-approval-request`. Attach the approval descriptor here so the paused
+    // transcript part renders consistently in every approval UI.
+    if (chunk.type === "tool-output-available" && toolCallId) {
+      const descriptor = this._descriptorForPausedOutput(
+        requestId,
+        toolCallId,
+        (chunk as { output?: unknown }).output
+      );
+      return descriptor ? { ...chunk, approvalDescriptor: descriptor } : chunk;
+    }
+
+    if (chunk.type !== "tool-approval-request" || !toolCallId) return chunk;
+
+    const storedDescriptor =
+      this._activeTurnActionApprovalDescriptors.get(toolCallId);
+    if (storedDescriptor) {
+      return {
+        ...chunk,
+        approvalDescriptor: storedDescriptor
+      };
+    }
+
+    let pending = pendingActionCalls.get(toolCallId);
+    if (!pending && parts) {
+      const part = parts.find(
+        (candidate) =>
+          "toolCallId" in candidate && candidate.toolCallId === toolCallId
+      ) as Record<string, unknown> | undefined;
+      if (typeof part?.toolName === "string") {
+        pending = {
+          toolName: part.toolName,
+          input: "input" in part ? normalizeToolInput(part.input).input : {}
+        };
+      }
+    }
+    if (!pending) return chunk;
+
+    const metadata = this._activeTurnActionMetadata.get(pending.toolName);
+    if (!metadata) return chunk;
+
+    const descriptor: ActionApprovalDescriptor = {
+      requestId,
+      toolCallId,
+      action: metadata.actionName,
+      summary: metadata.summary,
+      input: pending.input ?? {},
+      permissions: metadata.permissions ?? [],
+      ...(metadata.risk !== undefined && { risk: metadata.risk }),
+      kind: metadata.kind
+    };
+
+    return {
+      ...chunk,
+      approvalDescriptor: descriptor
+    };
+  }
+
+  /**
+   * Build the approval descriptor for a paused tool output, the single source
+   * of truth for rendering a pending approval. Durable-pause actions read the
+   * descriptor persisted on their pending row (resolved permissions, survives
+   * compaction); codemode pauses derive `connector.method` from the first
+   * pending action and let {@link describePausedExecution} enrich it. Returns
+   * `undefined` for non-paused outputs or when no descriptor can be built.
+   */
+  private _descriptorForPausedOutput(
+    requestId: string,
+    toolCallId: string,
+    output: unknown
+  ): ActionApprovalDescriptor | undefined {
+    if (typeof output !== "object" || output === null) return undefined;
+    const o = output as {
+      status?: unknown;
+      executionId?: unknown;
+      pending?: unknown;
+    };
+    if (o.status !== "paused") return undefined;
+    const executionId =
+      typeof o.executionId === "string" ? o.executionId : undefined;
+
+    if (executionId?.startsWith(ACTION_PAUSE_ID_PREFIX)) {
+      const row = this._readActionPendingRow(executionId);
+      if (!row?.descriptor_json) return undefined;
+      try {
+        return JSON.parse(row.descriptor_json) as ActionApprovalDescriptor;
+      } catch {
+        return undefined;
+      }
+    }
+
+    const pending = Array.isArray(o.pending)
+      ? (o.pending as import("@cloudflare/codemode").PendingAction[])
+      : [];
+    const first = pending[0];
+    if (!first) return undefined;
+    const label = `${first.connector}.${first.method}`;
+    const base: ActionApprovalDescriptor = {
+      requestId,
+      toolCallId,
+      action: label,
+      summary: label,
+      input: first.args,
+      permissions: [],
+      kind: "durable-pause"
+    };
+    const override = this.describePausedExecution(pending, {
+      requestId,
+      toolCallId
+    });
+    if (!override) return base;
+    return {
+      ...base,
+      ...override,
+      // Identity fields are ours to set — an override can't retarget the part.
+      requestId,
+      toolCallId
+    };
+  }
+
+  private _applyActionApprovalDescriptorToParts(
+    chunk: StreamChunkData,
+    parts: UIMessage["parts"]
+  ): void {
+    if (
+      (chunk.type !== "tool-approval-request" &&
+        chunk.type !== "tool-output-available") ||
+      typeof chunk.toolCallId !== "string" ||
+      chunk.approvalDescriptor === undefined
+    ) {
+      return;
+    }
+    const part = parts.find(
+      (candidate) =>
+        "toolCallId" in candidate && candidate.toolCallId === chunk.toolCallId
+    ) as Record<string, unknown> | undefined;
+    if (!part) return;
+    if (chunk.type === "tool-approval-request") {
+      // A genuine AI SDK approval request: the descriptor rides on the
+      // approval object (which also carries the eventual decision).
+      part.approval = {
+        ...(part.approval as Record<string, unknown> | undefined),
+        descriptor: chunk.approvalDescriptor
+      };
+      return;
+    }
+    // A durable pause (durable-pause action / codemode) is a SETTLED
+    // `output-available` part, not an AI SDK approval. Putting the descriptor
+    // on `part.approval` would make `convertToModelMessages` emit a
+    // `tool-approval-request` for an already-resolved output on the next turn
+    // (an invalid prompt). Use a sibling field conversion ignores instead.
+    part.approvalDescriptor = chunk.approvalDescriptor;
+  }
+
   private async _streamResultToRpcCallback(
     requestId: string,
     result: StreamableResult,
@@ -7997,6 +10592,10 @@ export class Think<
     try {
       this._insideInferenceLoop = true;
       const flushState = { chunksSinceFlush: 0, hasFlushedContent: false };
+      const pendingActionCalls = new Map<
+        string,
+        { toolName: string; input: unknown | undefined }
+      >();
       try {
         const guardedStream = iterateWithStallWatchdog(
           result.toUIMessageStream(),
@@ -8021,8 +10620,17 @@ export class Think<
           // RPC callbacks receive serialized UIMessage chunks directly; unlike
           // the WebSocket protocol, there is no wrapper frame to rewrite for
           // accumulator actions such as `error`.
-          const streamChunk = chunk as unknown as StreamChunkData;
+          const streamChunk = this._annotateActionApprovalChunk(
+            requestId,
+            chunk as unknown as StreamChunkData,
+            pendingActionCalls,
+            accumulator.parts
+          );
           const { action } = accumulator.applyChunk(streamChunk);
+          this._applyActionApprovalDescriptorToParts(
+            streamChunk,
+            accumulator.parts
+          );
 
           if (action?.type === "error") {
             streamError = action.error;
@@ -8062,7 +10670,7 @@ export class Think<
 
           this._alignStreamStartId(streamChunk, action, accumulator, false);
 
-          const chunkBody = JSON.stringify(chunk);
+          const chunkBody = JSON.stringify(streamChunk);
           await this._storeChunkDurably(
             streamId,
             streamChunk,
@@ -8415,6 +11023,10 @@ export class Think<
     // terminal delivery so the driver can compact and re-run the turn.
     let overflowRetry = false;
     const flushState = { chunksSinceFlush: 0, hasFlushedContent: false };
+    const pendingActionCalls = new Map<
+      string,
+      { toolName: string; input: unknown | undefined }
+    >();
 
     const stallTimeoutMs =
       this._activeStallTimeoutMs ?? this.chatStreamStallTimeoutMs;
@@ -8443,8 +11055,17 @@ export class Think<
             break;
           }
 
-          const streamChunk = chunk as unknown as StreamChunkData;
+          const streamChunk = this._annotateActionApprovalChunk(
+            requestId,
+            chunk as unknown as StreamChunkData,
+            pendingActionCalls,
+            accumulator.parts
+          );
           const { action } = accumulator.applyChunk(streamChunk);
+          this._applyActionApprovalDescriptorToParts(
+            streamChunk,
+            accumulator.parts
+          );
 
           // Approved server tools execute during a continuation stream, but
           // their original tool part lives in an earlier assistant message.
@@ -8513,7 +11134,7 @@ export class Think<
             continuation
           );
 
-          const chunkBody = JSON.stringify(chunk);
+          const chunkBody = JSON.stringify(streamChunk);
           await this._storeChunkDurably(
             streamId,
             streamChunk,
@@ -8949,6 +11570,67 @@ export class Think<
   }
 
   /**
+   * List everything awaiting human approval — parked `kind: "durable-pause"`
+   * actions and paused codemode executions — each carrying its
+   * {@link ActionApprovalDescriptor}. The unified, descriptor-first view a
+   * dashboard, voice backend, or messenger reconciles against; resolve any of
+   * them via {@link approveExecution} / {@link rejectExecution}. Pass an
+   * `executionId` to scope to one.
+   *
+   * Client-callable.
+   */
+  async pendingApprovals(executionId?: string): Promise<PendingApproval[]> {
+    const out: PendingApproval[] = [];
+
+    for (const row of this._listActionPendingRows()) {
+      if (executionId && row.execution_id !== executionId) continue;
+      if (!row.descriptor_json) continue;
+      let descriptor: ActionApprovalDescriptor;
+      try {
+        descriptor = JSON.parse(
+          row.descriptor_json
+        ) as ActionApprovalDescriptor;
+      } catch {
+        continue;
+      }
+      out.push({
+        executionId: row.execution_id,
+        source: "action",
+        descriptor
+      });
+    }
+
+    const runtime = this._codemodeRuntime();
+    if (runtime) {
+      const pending = await runtime.pending(executionId);
+      const seen = new Set<string>();
+      for (const action of pending) {
+        if (seen.has(action.executionId)) continue;
+        seen.add(action.executionId);
+        const group = pending.filter(
+          (candidate) => candidate.executionId === action.executionId
+        );
+        const toolCallId =
+          this._findExecutionToolCall(action.executionId) ?? "";
+        const descriptor = this._descriptorForPausedOutput("", toolCallId, {
+          status: "paused",
+          executionId: action.executionId,
+          pending: group
+        });
+        if (descriptor) {
+          out.push({
+            executionId: action.executionId,
+            source: "codemode",
+            descriptor
+          });
+        }
+      }
+    }
+
+    return out;
+  }
+
+  /**
    * Approve a paused execution and resume it. The run continues from where
    * it stopped (replaying logged work, executing the approved call); the
    * outcome — completed, errored, or paused again on the NEXT gated call —
@@ -8962,6 +11644,11 @@ export class Think<
    * Client-callable.
    */
   async approveExecution(executionId: string): Promise<unknown> {
+    // Durable-pause action approvals own the `actpause_` id space and resolve
+    // against the pending-approval store, not the codemode runtime.
+    if (executionId.startsWith(ACTION_PAUSE_ID_PREFIX)) {
+      return await this._approveActionPause(executionId);
+    }
     const runtime = this._codemodeRuntime();
     if (!runtime) {
       return {
@@ -8980,6 +11667,135 @@ export class Think<
   }
 
   /**
+   * Approve a parked `kind: "durable-pause"` action and run its `execute`.
+   *
+   * Claim-by-delete makes this idempotent across tabs/recovery: only the caller
+   * that removes the row runs the action; a racing approve/reject sees no row
+   * and reports "already resolved". Authorization happened at PAUSE time — the
+   * human approval is the authority now, so we do not re-authorize (the turn
+   * context that `authorizeAction` needs is gone). The action runs through the
+   * ledger so its side effect stays replay-safe, the outcome replaces the
+   * paused transcript part, and the chat continues even with no socket open.
+   */
+  private async _approveActionPause(executionId: string): Promise<unknown> {
+    const row = this._claimActionPendingRow(executionId);
+    if (!row) {
+      return {
+        status: "error",
+        executionId,
+        error: `Execution "${executionId}" is no longer pending — it was approved or rejected elsewhere.`
+      };
+    }
+
+    const action = await this._findRegisteredAction(row.action_name);
+    if (!action) {
+      const output = {
+        status: "error",
+        executionId,
+        action: row.action_name,
+        error:
+          `Action "${row.action_name}" is no longer registered, so the ` +
+          `approved call cannot run. The approval was consumed.`
+      };
+      await this._applyExecutionOutcome(executionId, output);
+      return output;
+    }
+
+    let input: unknown;
+    try {
+      input = JSON.parse(row.input_json);
+    } catch {
+      input = {};
+    }
+
+    const output = await this._runApprovedActionPause(action, row, input);
+    this._emitActionPauseEvent({
+      type: "action:pause:approved",
+      payload: { action: row.action_name, executionId }
+    });
+    await this._applyExecutionOutcome(executionId, output);
+    return output;
+  }
+
+  /** Resolve a registered action by its resolved name (config.name ?? key). */
+  private async _findRegisteredAction(name: string): Promise<Action | null> {
+    const actions = await this.getActions();
+    for (const [registrationName, candidate] of Object.entries(actions)) {
+      if (!isAction(candidate)) continue;
+      const resolved = candidate.config.name ?? registrationName;
+      if (resolved === name) return candidate;
+    }
+    return null;
+  }
+
+  /**
+   * Run a just-approved durable-pause action's `execute` through the ledger.
+   * Mirrors the inline `_actionToTool` execute wrapper (timeout, abort race,
+   * model-output prep) MINUS authorization — that was settled at pause time.
+   */
+  private async _runApprovedActionPause(
+    action: Action,
+    row: ActionPendingRow,
+    input: unknown
+  ): Promise<unknown> {
+    const config = action.config;
+    const executeAction = config.execute as (
+      input: unknown,
+      ctx: ActionContext
+    ) => Promise<unknown> | unknown;
+    const idempotencyKey = config.idempotencyKey as
+      | ActionIdempotencyKey<unknown>
+      | undefined;
+    const { signal, cleanup } = createActionAbortSignal(
+      undefined,
+      config.timeoutMs ?? DEFAULT_ACTION_TIMEOUT_MS
+    );
+    const ctx: ActionContext = {
+      agent: this,
+      env: this.env as Cloudflare.Env,
+      requestId: row.request_id ?? "",
+      toolCallId: row.tool_call_id,
+      messages: [],
+      signal,
+      // No-op: a durable-pause approved action is delivered by a later
+      // continuation turn (different requestId), so a same-turn attachment
+      // can't be delivered in v1.
+      attachReply: () => {}
+    };
+    const abortError = () =>
+      signal.reason instanceof Error
+        ? signal.reason
+        : new Error(signal.reason ? String(signal.reason) : "Action aborted");
+    let onAbort: (() => void) | undefined;
+    try {
+      if (signal.aborted) throw abortError();
+      const abortPromise = new Promise<never>((_, reject) => {
+        onAbort = () => reject(abortError());
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
+      const runAction = async () => {
+        const out = await Promise.race([
+          Promise.resolve(executeAction(input, ctx)),
+          abortPromise
+        ]);
+        return prepareActionOutputForModel(out);
+      };
+      return await this._runLedgeredAction({
+        toolName: row.action_name,
+        idempotencyKey,
+        input,
+        ctx,
+        runAction
+      });
+    } catch (error) {
+      return actionErrorEnvelope(error);
+    } finally {
+      if (onAbort) signal.removeEventListener("abort", onAbort);
+      cleanup();
+    }
+  }
+
+  /**
    * Reject a paused execution's pending action, ending the run. The
    * transcript's paused output is replaced with
    * `{ status: "rejected", executionId, reason }` and the chat
@@ -8991,6 +11807,9 @@ export class Think<
     executionId: string,
     reason?: string
   ): Promise<unknown> {
+    if (executionId.startsWith(ACTION_PAUSE_ID_PREFIX)) {
+      return await this._rejectActionPause(executionId, reason);
+    }
     const runtime = this._codemodeRuntime();
     if (!runtime) {
       return {
@@ -9031,6 +11850,38 @@ export class Think<
       executionId,
       reason: reason ?? "Rejected by user"
     };
+    await this._applyExecutionOutcome(executionId, output);
+    return output;
+  }
+
+  /**
+   * Reject a parked `kind: "durable-pause"` action. Claim-by-delete consumes
+   * the pending row (idempotent across tabs/recovery), the action's `execute`
+   * never runs, and the paused transcript part is replaced with a `rejected`
+   * outcome so the model can adapt or explain.
+   */
+  private async _rejectActionPause(
+    executionId: string,
+    reason?: string
+  ): Promise<unknown> {
+    const row = this._claimActionPendingRow(executionId);
+    if (!row) {
+      return {
+        status: "error",
+        executionId,
+        error: `Execution "${executionId}" is no longer pending — it was approved or rejected elsewhere.`
+      };
+    }
+    const output = {
+      status: "rejected",
+      executionId,
+      action: row.action_name,
+      reason: reason ?? "Rejected by user"
+    };
+    this._emitActionPauseEvent({
+      type: "action:pause:rejected",
+      payload: { action: row.action_name, executionId }
+    });
     await this._applyExecutionOutcome(executionId, output);
     return output;
   }
@@ -9082,7 +11933,10 @@ export class Think<
       );
     }
     // Continue on the approving connection when there is one (WS callable),
-    // else any open connection (DO-stub approval with clients attached).
+    // else any open connection (DO-stub approval with clients attached). When
+    // NO connection is open — an approval arriving via RPC from a dashboard,
+    // webhook, or voice backend — fall back to a connection-independent
+    // continuation so the model still advances and the result isn't stranded.
     const { connection } = getCurrentAgent();
     let target = connection;
     if (!target) {
@@ -9093,6 +11947,8 @@ export class Think<
     }
     if (target) {
       this._scheduleAutoContinuation(target);
+    } else {
+      this._runConnectionlessContinuation();
     }
     return true;
   }
@@ -9266,6 +12122,22 @@ export class Think<
     );
   }
 
+  /**
+   * `true` when an auto-continuation is armed but has not yet fired (#1650): a
+   * pending continuation that has not entered its turn (`!pastCoalesce`) whose
+   * coalesce timer is still pending or whose completeness drain is in progress.
+   * Mirrors `@cloudflare/ai-chat`'s `_hasArmedContinuation`, consuming the shared
+   * controller's `isArmed()`.
+   */
+  private _hasArmedContinuation(): boolean {
+    const pending = this._continuation.pending;
+    return (
+      pending !== null &&
+      !pending.pastCoalesce &&
+      this._autoContinuation.isArmed()
+    );
+  }
+
   protected async waitUntilStable(options?: {
     timeout?: number;
   }): Promise<boolean> {
@@ -9285,7 +12157,25 @@ export class Think<
       }
 
       if (!this.hasPendingInteraction()) {
-        return true;
+        // An auto-continuation may be armed (#1650): the coalesce timer is
+        // still pending or its drain is in flight. Report not-stable and wait
+        // it out, mirroring `@cloudflare/ai-chat` — otherwise idle eviction /
+        // recovery could act in the ~50ms window before the held continuation
+        // fires (and the turn it enqueues then drains via the loop top).
+        if (!this._hasArmedContinuation()) {
+          return true;
+        }
+        if (
+          (await this._awaitWithDeadline(
+            new Promise<void>((resolve) =>
+              setTimeout(resolve, AutoContinuationController.COALESCE_MS)
+            ),
+            deadline
+          )) === TIMED_OUT
+        ) {
+          return false;
+        }
+        continue;
       }
 
       const pending = this._pendingInteractionPromise;
@@ -9312,23 +12202,11 @@ export class Think<
     }
   }
 
-  private async _awaitWithDeadline<T>(
+  private _awaitWithDeadline<T>(
     promise: Promise<T>,
     deadline: number | null
   ): Promise<T | typeof TIMED_OUT> {
-    if (deadline == null) {
-      return promise;
-    }
-    const remainingMs = Math.max(0, deadline - Date.now());
-    let timer: ReturnType<typeof setTimeout>;
-    const result = await Promise.race([
-      promise,
-      new Promise<typeof TIMED_OUT>((resolve) => {
-        timer = setTimeout(() => resolve(TIMED_OUT), remainingMs);
-      })
-    ]);
-    clearTimeout(timer!);
-    return result;
+    return awaitWithDeadline(promise, deadline);
   }
 
   private _messageHasPendingInteraction(
@@ -10368,7 +13246,9 @@ export class Think<
       const result = await this._retryLastUserTurn(
         this._lastClientTools,
         this._lastBody,
-        controller ? { signal: controller.signal } : undefined
+        controller
+          ? { signal: controller.signal, trigger: "recovery-retry" }
+          : { trigger: "recovery-retry" }
       );
       await this._updateChatRecoveryIncident(
         data?.incidentId,
@@ -10605,7 +13485,9 @@ export class Think<
       this._applyRecoveredRequestContext(data);
       const result = await this.continueLastTurn(
         undefined,
-        controller ? { signal: controller.signal } : undefined
+        controller
+          ? { signal: controller.signal, trigger: "recovery-continue" }
+          : { trigger: "recovery-continue" }
       );
       await this._updateChatRecoveryIncident(
         data?.incidentId,
@@ -10709,39 +13591,12 @@ export class Think<
   // ── Auto-continuation ──────────────────────────────────────────
 
   private _scheduleAutoContinuation(connection: Connection): void {
-    if (this._continuation.pending?.pastCoalesce) {
-      this._continuation.deferred = {
-        connection,
-        connectionId: connection.id,
-        clientTools: this._lastClientTools,
-        body: undefined,
-        errorPrefix: "[Think] Auto-continuation failed:",
-        prerequisite: null
-      };
-      return;
-    }
-
-    if (this._continuation.pending) {
-      this._continuation.pending.connection = connection;
-      this._continuation.pending.connectionId = connection.id;
-      this._continuation.pending.clientTools = this._lastClientTools;
-      this._continuation.awaitingConnections.set(connection.id, connection);
-      this._resetAutoContinuationTimer();
-      return;
-    }
-
-    this._continuation.pending = {
+    this._autoContinuation.schedule({
       connection,
-      connectionId: connection.id,
-      requestId: crypto.randomUUID(),
       clientTools: this._lastClientTools,
       body: undefined,
-      errorPrefix: "[Think] Auto-continuation failed:",
-      prerequisite: null,
-      pastCoalesce: false
-    };
-    this._continuation.awaitingConnections.set(connection.id, connection);
-    this._resetAutoContinuationTimer();
+      errorPrefix: "[Think] Auto-continuation failed:"
+    });
   }
 
   /**
@@ -10760,9 +13615,7 @@ export class Think<
    * path rather than re-arming.
    */
   private _rearmPendingAutoContinuationForBatch(): void {
-    const pending = this._continuation.pending;
-    if (!pending || pending.pastCoalesce) return;
-    this._resetAutoContinuationTimer();
+    this._autoContinuation.rearmForBatch();
   }
 
   /**
@@ -10777,99 +13630,7 @@ export class Think<
    */
   private _onStreamingTurnFinalized(): void {
     this._streamingAssistant = null;
-    this._rearmPendingAutoContinuationForBatch();
-  }
-
-  private _resetAutoContinuationTimer(): void {
-    if (this._continuationTimer) {
-      clearTimeout(this._continuationTimer);
-    }
-    this._continuationTimer = setTimeout(() => {
-      this._continuationTimer = null;
-      const pending = this._continuation.pending;
-      if (!pending) return;
-      this._fireAutoContinuationWhenStable(pending.connection);
-    }, 50);
-  }
-
-  /**
-   * Fire an auto-continuation, but only once the model's parallel tool-call
-   * batch is fully answered (#1649). When the model emits several tool calls in
-   * one step the client answers each independently, so the first `autoContinue`
-   * arrives while slower siblings are still `input-available`. Continuing then
-   * would feed the provider an incomplete tool-result set
-   * (`MissingToolResultsError`) or, via the transcript-repair backstop, silently
-   * error the in-flight sibling and run a spurious extra continuation.
-   *
-   * The barrier is event-driven (#1650). Auto-continuation is only ever
-   * triggered by a tool-result/approval event, so rather than wait on a fixed
-   * timer we drain the in-flight applies, re-check, and — if the batch is still
-   * incomplete — return WITHOUT firing and WITHOUT holding the isolate, leaving
-   * `_continuation.pending` in place. The next sibling's result re-arms the
-   * coalesce timer (`_scheduleAutoContinuation`) and re-runs this check; the
-   * continuation fires once the final sibling lands. If the in-memory pending
-   * state is lost to eviction between siblings, the final result re-creates it
-   * from the persisted transcript and fires with a complete batch — self-healing.
-   * A true orphan (a sibling that never arrives) simply never auto-continues,
-   * which is correct: there is nothing valid to continue, and a later user turn
-   * / chat recovery repairs the transcript.
-   *
-   * The barrier also holds while the assistant turn is still streaming (the
-   * stream-active gate below): mid-stream the batch can still grow with tool
-   * calls the model hasn't emitted yet, so no completeness check is meaningful.
-   * `_onStreamingTurnFinalized` re-runs the check once the stream ends.
-   */
-  private _fireAutoContinuationWhenStable(connection: Connection): void {
-    if (!this._continuation.pending) return;
-    // The continuation is already running (a sibling result re-armed the timer
-    // after it started). New results coalesce/defer into it — don't double-fire.
-    if (this._continuation.pending.pastCoalesce) return;
-    // A drain is already in progress; the sibling that re-armed the timer is
-    // absorbed by it. Only one drain must run, and it re-checks on completion.
-    if (this._continuationBarrierActive) return;
-    // Stream-active gate (#1650, #1649). While the model is still streaming the
-    // assistant turn we CANNOT know the parallel tool batch is complete: the
-    // model emits tool calls sequentially, so a fast client tool can resolve
-    // before its slower siblings have even been streamed. At that point the
-    // siblings exist nowhere — not in `this.messages`, not in the in-flight
-    // `_streamingAssistant` accumulator — so no batch check can see them, and
-    // firing now would enqueue a continuation that repairs the (later
-    // materialized, still-pending) siblings to errored. The only signal that
-    // "more tool calls may still arrive" is that the stream is open, so we hold
-    // without firing. `_onStreamingTurnFinalized` re-runs this check once the
-    // stream ends and the batch is fully materialized, and any later sibling
-    // result re-arms it via `_scheduleAutoContinuation`.
-    if (this._streamingAssistant) return;
-    // Fast path: no apply in flight and the leaf step is not mid-batch.
-    if (!this._pendingInteractionPromise && !this._hasIncompleteToolBatch()) {
-      this._fireAutoContinuation(connection);
-      return;
-    }
-    this._continuationBarrierActive = true;
-    // keepAlive only for the bounded drain — the duration of the applies that
-    // have ALREADY arrived, not an open-ended wait for siblings that haven't.
-    // The pending-continuation state is in-memory, so we must not hibernate
-    // mid-apply; once the drain returns we release and let the isolate idle.
-    this.keepAliveWhile(() => this._drainInteractionApplies())
-      .catch(() => {})
-      .finally(() => {
-        // Clear the flag and re-check synchronously — no `await` between here
-        // and the fire/return decision, so a sibling-armed coalesce timer (a
-        // macrotask) cannot interleave and double-fire. `_fireAutoContinuation`
-        // cancels that timer; the incomplete-return path leaves it armed so the
-        // sibling that armed it re-runs this check when it fires.
-        this._continuationBarrierActive = false;
-        const pending = this._continuation.pending;
-        if (!pending || pending.pastCoalesce) return;
-        // A stream (re)started during the drain — hold; the finalize re-trigger
-        // will re-check once the batch is fully materialized.
-        if (this._streamingAssistant) return;
-        // Still waiting on an unanswered sibling — return without firing. The
-        // result that completes the batch re-triggers this check via its own
-        // `_scheduleAutoContinuation`; we do not pin the isolate in the interim.
-        if (this._hasIncompleteToolBatch()) return;
-        this._fireAutoContinuation(pending.connection);
-      });
+    this._autoContinuation.rearmForBatch();
   }
 
   /**
@@ -10881,23 +13642,11 @@ export class Think<
    * loop re-reads `_interactionApplyTail` after each await because a sibling can
    * extend the tail mid-drain; we stop once the tail stops advancing.
    */
-  private async _drainInteractionApplies(): Promise<void> {
-    let tail = this._interactionApplyTail;
-    // Bounded: each iteration only continues if a NEW apply was chained during
-    // the await, and applies are not self-perpetuating (only an inbound result
-    // enqueues one), so the tail necessarily stabilizes.
-    for (;;) {
-      // The pending continuation was cleared (chat clear / turn reset) — nothing
-      // to drain for; bail so the isolate isn't held by a stale drain.
-      if (!this._continuation.pending) return;
-      try {
-        await tail;
-      } catch {
-        // A rejected apply is irrelevant to completeness — re-read and re-check.
-      }
-      if (this._interactionApplyTail === tail) return;
-      tail = this._interactionApplyTail;
-    }
+  private _drainInteractionApplies(): Promise<void> {
+    return drainInteractionApplies(
+      () => this._continuation.pending !== null,
+      () => this._interactionApplyTail
+    );
   }
 
   /**
@@ -10912,23 +13661,20 @@ export class Think<
     return hasIncompleteToolBatch(this.messages);
   }
 
-  private _fireAutoContinuation(connection: Connection): void {
+  private _fireAutoContinuation(): void {
     const pending = this._continuation.pending;
     if (!pending) return;
 
-    // Cancel any still-armed coalesce timer so a sibling result that re-armed
-    // it during a barrier wait can't fire a duplicate continuation after this
-    // one starts (#1649).
-    if (this._continuationTimer) {
-      clearTimeout(this._continuationTimer);
-      this._continuationTimer = null;
-    }
-
-    const { requestId, clientTools } = pending;
+    const { connection, requestId, clientTools } = pending;
     const abortSignal = this._aborts.getSignal(requestId);
 
-    this.keepAliveWhile(async () => {
-      await this._turnQueue.enqueue(requestId, async () => {
+    this._admitTurn({
+      admission: "queue",
+      trigger: "auto-continuation",
+      requestId,
+      continuation: true,
+      allowNested: true,
+      execute: async () => {
         if (this._continuation.pending) {
           this._continuation.pending.pastCoalesce = true;
         }
@@ -10971,7 +13717,7 @@ export class Think<
           this._continuation.clearPending();
           this._activateDeferredContinuation();
         }
-      });
+      }
     }).catch((error) => {
       console.error("[Think] Auto-continuation failed:", error);
       this._aborts.remove(requestId);
@@ -10979,17 +13725,161 @@ export class Think<
   }
 
   private _activateDeferredContinuation(): void {
-    const pending = this._continuation.activateDeferred(() =>
-      crypto.randomUUID()
-    );
-    if (!pending) return;
+    this._autoContinuation.activateDeferredAndReschedule();
+  }
 
-    this._fireAutoContinuationWhenStable(pending.connection);
+  /**
+   * Run a continuation turn that does NOT require a live client connection.
+   *
+   * Used when a durable approval (a paused action or codemode execution) is
+   * resolved via RPC from a surface with no open chat socket — e.g. an ops
+   * dashboard, a webhook, or a voice backend approving hours/days later. The
+   * connection-bound auto-continuation barrier (`_fireAutoContinuation`) cannot
+   * fire without a `Connection`, so this mirrors its turn body but streams via
+   * `broadcast` (a no-op when nobody is attached) and always persists, so a
+   * client that reconnects later resumes the continued turn from history.
+   *
+   * Wrapped in `keepAliveWhile` because the resolving RPC returns before the
+   * continuation finishes (mirrors the submission-drain pattern).
+   */
+  private _runConnectionlessContinuation(): void {
+    void this.keepAliveWhile(async () => {
+      const requestId = crypto.randomUUID();
+      const abortSignal = this._aborts.getSignal(requestId);
+      try {
+        await this._admitTurn({
+          admission: "queue",
+          trigger: "auto-continuation",
+          requestId,
+          continuation: true,
+          allowNested: true,
+          execute: async () => {
+            const continuationBody = async () => {
+              const result = await agentContext.run(
+                {
+                  agent: this,
+                  connection: undefined,
+                  request: undefined,
+                  email: undefined
+                },
+                () =>
+                  this._runInferenceLoop({
+                    signal: abortSignal,
+                    clientTools: this._lastClientTools,
+                    body: this._lastBody,
+                    continuation: true
+                  })
+              );
+              if (result) {
+                await this._streamResult(requestId, result, abortSignal, {
+                  continuation: true
+                });
+              }
+            };
+
+            if (this.chatRecovery) {
+              await this._runChatRecoveryFiber(
+                requestId,
+                true,
+                continuationBody
+              );
+            } else {
+              await continuationBody();
+            }
+          }
+        });
+      } catch (error) {
+        console.error("[Think] Connection-less continuation failed:", error);
+      } finally {
+        this._aborts.remove(requestId);
+      }
+    });
   }
 
   // ── Response hook ──────────────────────────────────────────────
 
+  /**
+   * Render a reply attachment ({@link ReplyAttachment}) for delivery to the
+   * active channel. Returns the text/markdown to post, or `undefined` to skip —
+   * unknown types, or types a channel handles out of band (e.g. `voice_note`
+   * via the voice transport). Override to customize per app/channel.
+   */
+  renderAttachment(
+    attachment: ReplyAttachment
+  ): string | { markdown: string } | undefined {
+    switch (attachment.type) {
+      case "card":
+        return {
+          markdown: `\`\`\`json\n${JSON.stringify(
+            (attachment as { payload: unknown }).payload,
+            null,
+            2
+          )}\n\`\`\``
+        };
+      case "email_draft": {
+        const draft = attachment as { subject?: string; to?: string[] };
+        const lines = ["**Email draft**"];
+        if (draft.to?.length) lines.push(`To: ${draft.to.join(", ")}`);
+        if (draft.subject) lines.push(`Subject: ${draft.subject}`);
+        return { markdown: lines.join("\n") };
+      }
+      case "voice_note":
+        return undefined;
+      default:
+        return undefined;
+    }
+  }
+
+  /**
+   * Deliver known reply attachments to the active channel (best-effort, never
+   * fails the turn). Unknown types are ignored.
+   */
+  private async _renderChannelAttachments(
+    attachments: ReplyAttachment[] | undefined
+  ): Promise<void> {
+    if (!attachments?.length) {
+      return;
+    }
+    for (const attachment of attachments) {
+      let rendered: string | { markdown: string } | undefined;
+      try {
+        rendered = this.renderAttachment(attachment);
+      } catch (error) {
+        console.warn(
+          `[Think] renderAttachment threw: ${error instanceof Error ? error.message : String(error)}`
+        );
+        continue;
+      }
+      if (rendered === undefined) {
+        continue;
+      }
+      try {
+        await this.deliverNotice(rendered, { kind: "interim" });
+      } catch (error) {
+        console.warn(
+          `[Think] failed to deliver channel attachment: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+  }
+
   private async _fireResponseHook(result: ChatResponseResult): Promise<void> {
+    // Surface advisory reply attachments recorded during this turn.
+    result.attachments = this.replyAttachments(result.requestId);
+    // Record the channel-level delivery for this turn (the turn-scoped channel
+    // context is still set here — the response hook runs inside the turn body).
+    const deliveredChannel = this._activeChannelContext;
+    if (deliveredChannel) {
+      this._emitChannelEvent({
+        type: "channel:delivered",
+        payload: {
+          channel: deliveredChannel.channelId,
+          kind: "final",
+          turnEnded: true
+        }
+      });
+    }
+    await this._renderChannelAttachments(result.attachments);
     // Record the terminal status durably so a client connecting after the turn
     // ended still learns its outcome (see `_buildIdleConnectMessages`).
     await this._recordTerminalChatStatus(
@@ -11287,6 +14177,7 @@ export class Think<
 // from source (e.g. esbuild targeting ES2021).
 for (const method of [
   Think.prototype.pendingExecutions,
+  Think.prototype.pendingApprovals,
   Think.prototype.approveExecution,
   Think.prototype.rejectExecution
 ]) {

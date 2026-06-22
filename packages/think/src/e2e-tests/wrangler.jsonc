@@ -76,6 +76,14 @@
       {
         "name": "ThinkWorkflowRecoveryE2EAgent",
         "class_name": "ThinkWorkflowRecoveryE2EAgent"
+      },
+      {
+        "name": "ThinkActionPauseRecoveryE2EAgent",
+        "class_name": "ThinkActionPauseRecoveryE2EAgent"
+      },
+      {
+        "name": "ThinkActionLedgerRecoveryE2EAgent",
+        "class_name": "ThinkActionLedgerRecoveryE2EAgent"
       }
     ]
   },
@@ -141,6 +149,14 @@
     {
       "tag": "v12",
       "new_sqlite_classes": ["ThinkWorkflowRecoveryE2EAgent"]
+    },
+    {
+      "tag": "v13",
+      "new_sqlite_classes": ["ThinkActionPauseRecoveryE2EAgent"]
+    },
+    {
+      "tag": "v14",
+      "new_sqlite_classes": ["ThinkActionLedgerRecoveryE2EAgent"]
     }
   ],
   "r2_buckets": [

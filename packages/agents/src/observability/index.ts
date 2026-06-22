@@ -49,7 +49,8 @@ export const channels = {
   lifecycle: channel("agents:lifecycle"),
   workflow: channel("agents:workflow"),
   mcp: channel("agents:mcp"),
-  email: channel("agents:email")
+  email: channel("agents:email"),
+  channel: channel("agents:channel")
 } as const;
 
 /**
@@ -77,12 +78,15 @@ function getChannel(type: string): Channel {
   if (
     type.startsWith("message:") ||
     type.startsWith("tool:") ||
-    type.startsWith("submission:")
+    type.startsWith("submission:") ||
+    type.startsWith("action:")
   )
     return channels.message;
   if (type === "rpc" || type.startsWith("rpc:")) return channels.rpc;
   if (type.startsWith("state:")) return channels.state;
   if (type.startsWith("email:")) return channels.email;
+  if (type.startsWith("channel:") || type.startsWith("notice:"))
+    return channels.channel;
   // connect, disconnect, destroy
   return channels.lifecycle;
 }
@@ -107,7 +111,13 @@ export type ChannelEventMap = {
   rpc: Extract<ObservabilityEvent, { type: "rpc" | `rpc:${string}` }>;
   message: Extract<
     ObservabilityEvent,
-    { type: `message:${string}` | `tool:${string}` | `submission:${string}` }
+    {
+      type:
+        | `message:${string}`
+        | `tool:${string}`
+        | `submission:${string}`
+        | `action:${string}`;
+    }
   >;
   chat: Exclude<
     Extract<ObservabilityEvent, { type: `chat:${string}` }>,
@@ -130,6 +140,10 @@ export type ChannelEventMap = {
   workflow: Extract<ObservabilityEvent, { type: `workflow:${string}` }>;
   mcp: Extract<ObservabilityEvent, { type: `mcp:${string}` }>;
   email: Extract<ObservabilityEvent, { type: `email:${string}` }>;
+  channel: Extract<
+    ObservabilityEvent,
+    { type: `channel:${string}` | `notice:${string}` }
+  >;
 };
 
 /**

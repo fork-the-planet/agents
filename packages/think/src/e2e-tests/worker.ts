@@ -25,7 +25,13 @@ import type { LanguageModel, ToolSet, UIMessage } from "ai";
 import { z } from "zod";
 import { Session } from "agents/experimental/memory/session";
 import type { ObservabilityEvent } from "agents/observability";
-import { Think, Workspace, defaultContextOverflowClassifier } from "../think";
+import {
+  action,
+  Think,
+  Workspace,
+  defaultContextOverflowClassifier
+} from "../think";
+import type { Action } from "../think";
 import { ThinkWorkflow, type ThinkWorkflowStep } from "../workflows";
 import type {
   ChatErrorClassification,
@@ -54,6 +60,8 @@ type Env = {
   ThinkSubmissionRecoveryE2EAgent: DurableObjectNamespace<ThinkSubmissionRecoveryE2EAgent>;
   ThinkMessengerRecoveryE2EAgent: DurableObjectNamespace<ThinkMessengerRecoveryE2EAgent>;
   ThinkWorkflowRecoveryE2EAgent: DurableObjectNamespace<ThinkWorkflowRecoveryE2EAgent>;
+  ThinkActionPauseRecoveryE2EAgent: DurableObjectNamespace<ThinkActionPauseRecoveryE2EAgent>;
+  ThinkActionLedgerRecoveryE2EAgent: DurableObjectNamespace<ThinkActionLedgerRecoveryE2EAgent>;
   TestStructuredAgent: DurableObjectNamespace<TestStructuredAgent>;
   STEP_PROMPT_WORKFLOW: Workflow;
   AI: Ai;
@@ -2085,6 +2093,381 @@ export class ThinkWorkflowRecoveryE2EAgent extends Think<Env> {
       SELECT COUNT(*) as c FROM cf_agents_runs
     `;
     return (rows[0]?.c ?? 0) > 0;
+  }
+}
+
+// ── Durable-pause action recovery (deploy churn + connection-less approve) ──
+//
+// Step 5 (actions RFC) durable-pause approvals must survive a real deploy and
+// resume with NO live client connection. This agent drives the full path
+// against the wrangler-dev runtime:
+//   1. a chat turn calls a `kind: "durable-pause"` action, which parks a row in
+//      `cf_think_action_pending_approvals` and ends the turn
+//   2. a real SIGKILL + restart proves the pending row + its descriptor survive
+//      the deploy (rebuilt from the durable store on cold start)
+//   3. `approveExecution` with no open socket runs the action exactly once and
+//      the connection-independent continuation drives the model to completion
+//
+// The mock model parks on the first inference (no tool result yet) and emits a
+// final acknowledgement once the resolved action output is in the prompt.
+
+const ACTION_PAUSE_EXEC_COUNT_KEY = "test:action-pause-exec-count";
+const ACTION_PAUSE_ACK = "approved and acknowledged";
+
+function createActionPauseMockModel(): LanguageModel {
+  return {
+    specificationVersion: "v3",
+    provider: "test",
+    modelId: "mock-action-pause",
+    supportedUrls: {},
+    doGenerate() {
+      throw new Error("doGenerate not implemented in mock");
+    },
+    doStream(options: Record<string, unknown>) {
+      const messages = (options as { prompt?: unknown[] }).prompt ?? [];
+      // The resolved action output arrives as a `tool` role message; until then
+      // (the parking turn) the model calls the durable-pause action.
+      const hasToolResult = messages.some(
+        (m): m is Record<string, unknown> =>
+          typeof m === "object" &&
+          m !== null &&
+          (m as Record<string, unknown>).role === "tool"
+      );
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: "stream-start", warnings: [] });
+          if (!hasToolResult) {
+            const id = "ap1";
+            const input = JSON.stringify({ message: "deploy me" });
+            controller.enqueue({
+              type: "tool-input-start",
+              id,
+              toolName: "pauseAction"
+            });
+            controller.enqueue({ type: "tool-input-delta", id, delta: input });
+            controller.enqueue({ type: "tool-input-end", id });
+            controller.enqueue({
+              type: "tool-call",
+              toolCallId: id,
+              toolName: "pauseAction",
+              input
+            });
+            controller.enqueue({
+              type: "finish",
+              finishReason: v3FinishReason("tool-calls"),
+              usage: v3Usage(10, 5)
+            });
+          } else {
+            controller.enqueue({ type: "text-start", id: "ap-done" });
+            controller.enqueue({
+              type: "text-delta",
+              id: "ap-done",
+              delta: ACTION_PAUSE_ACK
+            });
+            controller.enqueue({ type: "text-end", id: "ap-done" });
+            controller.enqueue({
+              type: "finish",
+              finishReason: v3FinishReason("stop"),
+              usage: v3Usage(20, 10)
+            });
+          }
+          controller.close();
+        }
+      });
+      return Promise.resolve({ stream });
+    }
+  } as LanguageModel;
+}
+
+export class ThinkActionPauseRecoveryE2EAgent extends Think<Env> {
+  static options = { keepAliveIntervalMs: 2_000 };
+  override chatRecovery = true;
+  override maxSteps = 6;
+
+  override getModel(): LanguageModel {
+    return createActionPauseMockModel();
+  }
+
+  override getSystemPrompt(): string {
+    return "Durable-pause action recovery e2e agent.";
+  }
+
+  // The execute count lives in durable storage so "ran exactly once" can be
+  // asserted across the restart.
+  override getActions(): Record<string, Action> {
+    return {
+      pauseAction: action({
+        name: "pauseAction",
+        description: "A durable-pause action awaiting human approval",
+        inputSchema: z.object({ message: z.string() }),
+        kind: "durable-pause",
+        approval: true,
+        approvalSummary: "Deploy the thing",
+        approvalRisk: "high",
+        permissions: ["deploy:run"],
+        execute: async ({ message }): Promise<unknown> => {
+          const n =
+            (await this.ctx.storage.get<number>(ACTION_PAUSE_EXEC_COUNT_KEY)) ??
+            0;
+          await this.ctx.storage.put(ACTION_PAUSE_EXEC_COUNT_KEY, n + 1);
+          return `deployed: ${message}`;
+        }
+      })
+    };
+  }
+
+  // Continue an interrupted turn (the connection-less continuation also fires
+  // for the approve path; this keeps any mid-stream churn recoverable too).
+  override async onChatRecovery(): Promise<ChatRecoveryOptions> {
+    return { continue: true };
+  }
+
+  @callable()
+  async startActionPauseTurn(prompt: string): Promise<{ done: boolean }> {
+    const cb = new CollectingChatCallback();
+    await this.chat(prompt, cb);
+    return { done: cb.doneCalled };
+  }
+
+  @callable()
+  async pendingCount(): Promise<number> {
+    return (await this.pendingApprovals()).length;
+  }
+
+  /** First pending approval's descriptor + id (JSON for the RPC boundary). */
+  @callable()
+  async firstPendingJson(): Promise<string | null> {
+    const pending = await this.pendingApprovals();
+    return pending.length > 0 ? JSON.stringify(pending[0]) : null;
+  }
+
+  /** Approve the first pending approval with no open connection. */
+  @callable()
+  async approveFirstPending(): Promise<{
+    executionId: string | null;
+    result: string;
+  }> {
+    const pending = await this.pendingApprovals();
+    if (pending.length === 0) return { executionId: null, result: "none" };
+    const executionId = pending[0].executionId;
+    const result = await this.approveExecution(executionId);
+    return { executionId, result: JSON.stringify(result) };
+  }
+
+  @callable()
+  async getExecCount(): Promise<number> {
+    return (
+      (await this.ctx.storage.get<number>(ACTION_PAUSE_EXEC_COUNT_KEY)) ?? 0
+    );
+  }
+
+  @callable()
+  async getFinalText(): Promise<string> {
+    const assistant = this.messages.filter((m) => m.role === "assistant");
+    return assistant
+      .flatMap((m) => m.parts)
+      .filter((p): p is { type: "text"; text: string } => p.type === "text")
+      .map((p) => p.text)
+      .join("");
+  }
+
+  @callable()
+  async hasFiberRows(): Promise<boolean> {
+    const rows = this.sql<{ c: number }>`
+      SELECT COUNT(*) as c FROM cf_agents_runs
+    `;
+    return (rows[0]?.c ?? 0) > 0;
+  }
+
+  @callable()
+  override async getMessages(): Promise<UIMessage[]> {
+    return this.messages;
+  }
+}
+
+// ── Action ledger pending-retry lease recovery (crash → reclaim) ────
+//
+// A crashed executor leaves a `pending` row in `cf_think_action_ledger`. We
+// represent that crash artifact deterministically by seeding a stale `pending`
+// row (a crash leaves exactly such a row), then prove it survives a REAL deploy
+// (SIGKILL + restart) and is reclaimed by a subsequent invocation: an action
+// with an explicit `idempotencyKey` finds the stale row, reclaims the lease,
+// and runs its side effect to completion exactly once — instead of being stuck
+// behind a permanent `ActionPendingError`.
+
+const LEDGER_RECOVERY_EXEC_COUNT_KEY = "test:ledger-recovery-exec-count";
+const LEDGER_RECOVERY_KEY = "ledger-recovery-key";
+const LEDGER_RECOVERY_MESSAGE = "ledger work";
+const LEDGER_RECOVERY_ACK = "ledger action acknowledged";
+
+function createLedgerActionMockModel(): LanguageModel {
+  return {
+    specificationVersion: "v3",
+    provider: "test",
+    modelId: "mock-action-ledger",
+    supportedUrls: {},
+    doGenerate() {
+      throw new Error("doGenerate not implemented in mock");
+    },
+    doStream(options: Record<string, unknown>) {
+      const messages = (options as { prompt?: unknown[] }).prompt ?? [];
+      // Until the resolved action output is in the prompt (a `tool` role
+      // message), the model keeps calling the action.
+      const hasToolResult = messages.some(
+        (m): m is Record<string, unknown> =>
+          typeof m === "object" &&
+          m !== null &&
+          (m as Record<string, unknown>).role === "tool"
+      );
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: "stream-start", warnings: [] });
+          if (!hasToolResult) {
+            const id = "al1";
+            const input = JSON.stringify({ message: LEDGER_RECOVERY_MESSAGE });
+            controller.enqueue({
+              type: "tool-input-start",
+              id,
+              toolName: "slowAction"
+            });
+            controller.enqueue({ type: "tool-input-delta", id, delta: input });
+            controller.enqueue({ type: "tool-input-end", id });
+            controller.enqueue({
+              type: "tool-call",
+              toolCallId: id,
+              toolName: "slowAction",
+              input
+            });
+            controller.enqueue({
+              type: "finish",
+              finishReason: v3FinishReason("tool-calls"),
+              usage: v3Usage(10, 5)
+            });
+          } else {
+            controller.enqueue({ type: "text-start", id: "al-done" });
+            controller.enqueue({
+              type: "text-delta",
+              id: "al-done",
+              delta: LEDGER_RECOVERY_ACK
+            });
+            controller.enqueue({ type: "text-end", id: "al-done" });
+            controller.enqueue({
+              type: "finish",
+              finishReason: v3FinishReason("stop"),
+              usage: v3Usage(20, 10)
+            });
+          }
+          controller.close();
+        }
+      });
+      return Promise.resolve({ stream });
+    }
+  } as LanguageModel;
+}
+
+export class ThinkActionLedgerRecoveryE2EAgent extends Think<Env> {
+  static options = { keepAliveIntervalMs: 2_000 };
+  override maxSteps = 6;
+  // Short lease (a class-level default so it survives the restart) makes a
+  // crash-left pending row immediately reclaimable on the next invocation.
+  override actionLedgerPendingRetryLeaseMs = 1_000;
+
+  override getModel(): LanguageModel {
+    return createLedgerActionMockModel();
+  }
+
+  override getSystemPrompt(): string {
+    return "Action ledger recovery e2e agent.";
+  }
+
+  override getActions(): Record<string, Action> {
+    return {
+      slowAction: action({
+        name: "slowAction",
+        description: "An idempotent action with a recorded side effect",
+        inputSchema: z.object({ message: z.string() }),
+        idempotencyKey: LEDGER_RECOVERY_KEY,
+        execute: async ({ message }): Promise<unknown> => {
+          const n =
+            (await this.ctx.storage.get<number>(
+              LEDGER_RECOVERY_EXEC_COUNT_KEY
+            )) ?? 0;
+          await this.ctx.storage.put(LEDGER_RECOVERY_EXEC_COUNT_KEY, n + 1);
+          return `did: ${message}`;
+        }
+      })
+    };
+  }
+
+  /**
+   * Seed the crash artifact: a stale `pending` ledger row for the action's
+   * explicit key, with the matching input hash, left far in the past so it is
+   * stale under the lease. This is exactly what a crashed mid-execute leaves
+   * behind, minus the timing race.
+   */
+  @callable()
+  async seedStalePendingRow(): Promise<void> {
+    const ensure = this as unknown as {
+      _ensureActionLedgerTable: () => void;
+      _actionInputHash: (input: unknown) => string;
+    };
+    ensure._ensureActionLedgerTable();
+    const inputHash = ensure._actionInputHash({
+      message: LEDGER_RECOVERY_MESSAGE
+    });
+    const past = Date.now() - 600_000;
+    this.sql`
+      INSERT INTO cf_think_action_ledger (
+        key, action_name, request_id, tool_call_id, input_hash, status,
+        result_json, created_at, updated_at
+      )
+      VALUES (
+        ${`action:slowAction:${LEDGER_RECOVERY_KEY}`}, ${"slowAction"}, ${null},
+        ${"tc-crashed"}, ${inputHash}, ${"pending"}, ${null}, ${past}, ${past}
+      )
+    `;
+  }
+
+  @callable()
+  async runLedgerActionTurn(prompt: string): Promise<{ done: boolean }> {
+    const cb = new CollectingChatCallback();
+    await this.chat(prompt, cb);
+    return { done: cb.doneCalled };
+  }
+
+  @callable()
+  async listLedgerRows(): Promise<
+    Array<{ key: string; status: string; updated_at: number }>
+  > {
+    (
+      this as unknown as { _ensureActionLedgerTable: () => void }
+    )._ensureActionLedgerTable();
+    return this.sql<{ key: string; status: string; updated_at: number }>`
+      SELECT key, status, updated_at FROM cf_think_action_ledger
+      ORDER BY key ASC
+    `;
+  }
+
+  @callable()
+  async getExecCount(): Promise<number> {
+    return (
+      (await this.ctx.storage.get<number>(LEDGER_RECOVERY_EXEC_COUNT_KEY)) ?? 0
+    );
+  }
+
+  @callable()
+  async getFinalText(): Promise<string> {
+    const assistant = this.messages.filter((m) => m.role === "assistant");
+    return assistant
+      .flatMap((m) => m.parts)
+      .filter((p): p is { type: "text"; text: string } => p.type === "text")
+      .map((p) => p.text)
+      .join("");
+  }
+
+  @callable()
+  override async getMessages(): Promise<UIMessage[]> {
+    return this.messages;
   }
 }
 

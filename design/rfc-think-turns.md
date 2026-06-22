@@ -19,8 +19,10 @@ Actions → Channels** — because the later two depend on seams this RFC define
 - **Actions RFC** needs the `TurnContext`/recovery taxonomy and the
   `recovery-continue`/`recovery-retry` triggers defined here, and authorizes at
   `_admitTurn` time.
-- **Channels RFC** needs `TurnSpec.channelContext`, `runTurn({ channel })`, and
-  `addMessages()` (for `informModel`).
+- **Channels RFC** (shipped) uses `runTurn({ channel })` and `addMessages()` (for
+  `informModel`). It threads the bare `channel` id through `_admitTurn` into a
+  turn-scoped `_activeChannelContext` rather than the originally-reserved
+  `TurnSpec.channelContext` (never built).
 
 What is already built vs. still open in **this** RFC:
 
@@ -29,8 +31,21 @@ What is already built vs. still open in **this** RFC:
   Section 3 below is the spec it shipped against; it is kept for context and as
   the upsert/append/idempotency contract — **do not re-implement it.** Any
   divergence found in code is the source of truth, not this section.
-- ⛔ **`runTurn()` + `TurnSpec`/`_admitTurn` — NOT BUILT.** This is the remaining
-  scope of this RFC and what a fresh session should implement.
+- ✅ **`runTurn()` facade — SHIPPED** (step 2). Public `runTurn(options)` with
+  `mode: "wait" | "submit" | "stream"` delegates to the existing
+  `saveMessages` / `continueLastTurn` / `submitMessages` / `chat` methods.
+  Step-2 option surface is intentionally narrowed per mode (no unified
+  `RunTurnBase` superset yet); in-queue re-entrancy guard deferred to step 3
+  `_admitTurn`. Exported types: `TurnInputMessages`, `RunTurnBase`, `RunTurnWait`,
+  `RunTurnSubmit`, `RunTurnStream`, `RunTurnOptions`, `TurnResult`.
+- ✅ **`TurnSpec`/`_admitTurn` — SHIPPED** (step 3). The as-built extraction keeps
+  path-specific bodies/order intact while routing every turn admission through an
+  internal `TurnSpec`/`_admitTurn` spine. Submission admission and submission
+  drain execution are split so the drain never re-enters row insert/dedup.
+  Blocking nested queue admissions (`wait`/`continuation`/`stream`) now throw via
+  an async-local admitted-turn marker; legitimate concurrent non-nested turns
+  still enqueue behind. Current `saveMessages([])` and function-returning-empty
+  behavior is preserved for compatibility.
 
 Recovery-RFC gate (see "Coordination with the chat-recovery RFC"): the
 `runTurn` _facade_ (suggested order step 2) can land anytime, but the
@@ -174,13 +189,13 @@ interface RunTurnBase {
   /** Custom body exposed on `TurnContext.body` for `beforeTurn`. */
   body?: Record<string, unknown>;
   /**
-   * Optional channel/surface tag (a plain string). Passthrough for the Channels
-   * RFC. In `stream` mode it routes through `chatWithMessengerContext` only when
-   * a full `MessengerContext` is supplied internally (see `TurnSpec.channelContext`);
-   * the bare string is otherwise recorded as a lightweight `metadata.channel`
-   * tag on the persisted user message. It does not itself route delivery in
-   * `wait`/`submit`. The Channels RFC owns the string -> `MessengerContext`
-   * resolution.
+   * Optional channel/surface tag (a plain string). Delivered by the Channels
+   * RFC: it threads through every `runTurn` dispatch mode into `_admitTurn`,
+   * where the runtime resolves it to a turn-scoped `_activeChannelContext` and
+   * persists the id as `metadata.channel` on the user message (so recovery can
+   * re-resolve and re-apply per-channel policy). It is no longer routed via a
+   * serialized `TurnSpec.channelContext`. The Channels RFC owns the string ->
+   * `ChannelContext` resolution and what `channel` _means_.
    */
   channel?: string;
   /**
@@ -304,9 +319,23 @@ Supported patterns for "do more work from inside a turn":
 - **`addMessages(...)`** — to add transcript context without running a turn (it
   deliberately bypasses the turn queue; see below).
 
-`runTurn` should detect in-queue re-entrancy for `wait`/`continuation` and throw
-a clear error ("runTurn({ mode: 'wait' }) cannot be called while a turn is
-active; use mode: 'submit' or addMessages()") rather than hang.
+`runTurn` must detect **in-queue** re-entrancy for `wait`/`continuation`/`stream`
+and throw a clear error ("runTurn({ mode: 'wait' }) cannot be called while a turn
+is active; use mode: 'submit' or addMessages()") rather than hang.
+
+**Step-2 facade vs step-3 `_admitTurn`.** The step-2 `runTurn` facade
+deliberately does **not** implement this guard: `_turnQueue.isActive` is too
+blunt — it is true whenever _any_ turn is executing, so guarding on it would
+throw on legitimate _concurrent, non-nested_ `wait` calls (e.g. a scheduled task
+or RPC issued while a WebSocket turn runs) that `saveMessages`/`continueLastTurn`
+handle today by enqueuing behind. There is no cheap precise "inside a turn body"
+signal at the facade layer (`agentContext` wraps all agent ops, not just turn
+bodies). The step-2 facade documents the deadlock footgun in its doc comment
+(behavior identical to calling `saveMessages`/`continueLastTurn` from inside a
+turn today — no regression). **As built in step 3:** `_admitTurn` owns precise
+nested-call detection via an async-local turn marker set around turn-body
+execution, so separate concurrent RPC/alarm invocations still enqueue behind
+instead of throwing.
 
 #### Recipes (DX)
 
@@ -376,8 +405,11 @@ interface TurnSpec {
   submissionId?: string;
   metadata?: Record<string, unknown>;
 
-  // Channel passthrough (Channels RFC owns the real semantics):
-  channelContext?: MessengerContext;
+  // Channel passthrough: the bare `channel` id flows through `_admitTurn`; the
+  // Channels RFC resolves it to a turn-scoped `_activeChannelContext` rather than
+  // a serialized `channelContext`. (`TurnSpec.channelContext` was reserved here
+  // but never built — see the Channels RFC "Coordination" / D2.)
+  channel?: string;
 }
 ```
 
@@ -387,15 +419,21 @@ interface TurnSpec {
 2. Bind abort: `_aborts.getSignal(requestId)` + `linkExternal(requestId, spec.signal)`.
 3. If `admission === "submit"`: insert/dedup the submission row and schedule the
    drain (today's `submitMessages` body); return `SubmitMessagesResult`.
-4. Else enqueue on `_turnQueue` with `spec.generation` (today's WS/programmatic
+4. **In-queue re-entrancy guard** (blocking queue admission only). If the spec
+   would enqueue and block on `_turnQueue` (`wait`/`continuation`/`stream`
+   semantics), and the caller is already inside an active turn body (async-local
+   turn marker — **not** `_turnQueue.isActive` alone, which is also true for
+   legitimate concurrent non-nested calls that should enqueue behind), throw the
+   documented error rather than deadlock.
+5. Else enqueue on `_turnQueue` with `spec.generation` (today's WS/programmatic
    enqueue), honoring skipped/stale/superseded semantics.
-5. Persist per `spec.persist` (append user message(s); none; or
+6. Persist per `spec.persist` (append user message(s); none; or
    continue-from-leaf precondition check).
-6. Optionally wrap in `_runChatRecoveryFiber(requestId, continuation, body)`.
-7. Run `_runInferenceLoop({ signal, clientTools, clientToolExecutor, body,
+7. Optionally wrap in `_runChatRecoveryFiber(requestId, continuation, body)`.
+8. Run `_runInferenceLoop({ signal, clientTools, clientToolExecutor, body,
 workflowPrompt, continuation })` inside the overflow-retry loop when
    `spec.overflowRetry`.
-8. Stream via the sink: `_streamResult` (ws-broadcast / programmatic-silent) or
+9. Stream via the sink: `_streamResult` (ws-broadcast / programmatic-silent) or
    `_streamResultToRpcCallback` (rpc-callback).
 
 #### Mapping existing paths onto `TurnSpec`
@@ -550,13 +588,18 @@ Think admission/recovery in the same ~9k-line file.
 `_admitTurn` is the natural single place to emit turn lifecycle events,
 paralleling the recovery layer's `chat:recovery:*`:
 
-- `chat:turn:admitted` — `{ requestId, trigger, admission, mode, continuation }`.
-- `chat:turn:skipped` / `chat:turn:aborted` / `chat:turn:completed` /
-  `chat:turn:error` — terminal outcomes with `{ requestId, trigger, status }`.
+- `chat:turn:start` — emitted when an admitted queued turn body actually starts
+  executing; payload includes `{ requestId, trigger, admission, continuation? }`
+  plus path-specific fields such as `generation` when present.
+- `chat:turn:finish` — emitted exactly once for the started turn body with
+  `{ requestId, trigger, admission, status, durationMs }`, optional
+  `continuation`, and `error` when the turn body throws.
 
-These replace ad-hoc per-path logging and give one consistent turn ledger across
-WS/RPC/programmatic/submission/recovery. Event names are additive; payloads must
-stay back-compatible with anything the recovery observability already emits.
+The shipped contract is intentionally smaller than the original proposed
+per-status event set: durable `submitMessages()` acceptance does not emit a turn
+event, while the later submission drain execution does. Event names are additive;
+payloads must stay back-compatible with anything recovery observability already
+emits.
 
 ## Versioning and compatibility
 
@@ -582,7 +625,9 @@ Layered, in the spirit of the recovery RFC's approach:
    anti-drop guard).
 2. **`_admitTurn` unit tests** with fake sinks/queue: request-id resolution,
    persist modes, generation/skipped semantics, submit dedup, overflow-retry
-   wrapping, recovery-fiber wrapping.
+   wrapping, recovery-fiber wrapping, **in-queue re-entrancy guard** (nested
+   `wait`/`continuation` throws; concurrent non-nested `wait` enqueues behind;
+   `submit`/`addMessages` exempt).
 3. **Behavior-parity integration tests.** Run the existing
    chat/saveMessages/submitMessages/continueLastTurn/WS suites unchanged against
    the refactored implementation — they are the regression gate.
@@ -607,6 +652,14 @@ Layered, in the spirit of the recovery RFC's approach:
   (`think.ts:7134`).
 - **No-turn writes never touch the turn queue.** `addMessages` must keep the
   `_hostSendMessage` no-deadlock guarantee.
+- **In-queue re-entrancy.** Blocking `wait`/`continuation`/`stream` from inside
+  an active turn body would deadlock on `_turnQueue`; `_admitTurn` throws via an
+  async-local turn marker. Legitimate concurrent non-nested queue admissions must
+  still enqueue behind, not throw.
+- **Empty programmatic input.** Step 3 preserves the current compatibility
+  behavior for `saveMessages([])` and function inputs that resolve to `[]`: they
+  still reach the admitted programmatic turn and may run inference on existing
+  history. The narrower step-2 `runTurn(wait)` static empty-input skip remains.
 - **Per-turn vs persisted client tools.** `chat()`/`stream` mode client tools
   are per-turn and must not be persisted to `_lastClientTools` (avoids recovery
   misclassification, `think.ts:4686`); WS/programmatic continue to persist
@@ -669,11 +722,13 @@ Layered, in the spirit of the recovery RFC's approach:
   dynamically), split into `runTurn` (wait), `streamTurn`, and keep
   `submitMessages`. Decision deferred until the prototype (`qw-demo`) exercises
   real call sites.
-- **`channel` field scope.** This RFC treats `channel` as a thin messenger-
-  context passthrough. If the Channels RFC needs per-channel admission policy
-  (tools/instructions/turn caps) to be decided at admission time, `TurnSpec`
-  may need a richer `channelContext`. Flagged so the Channels RFC can extend the
-  seam.
+- **`channel` field scope → resolved by the Channels RFC.** Per-channel admission
+  policy (tools/instructions/turn caps) _is_ decided at admission, but **not** via
+  a richer serialized `TurnSpec.channelContext`. The Channels RFC threads the bare
+  `channel` id through `_admitTurn`, resolves it to a turn-scoped
+  `_activeChannelContext`, and persists the id as `metadata.channel` for recovery
+  re-resolution. `TurnSpec.channelContext` was never built; the seam is the
+  `channel` string plus turn-scoped context.
 - **Sequencing risk.** If the recovery RFC slips, do we land `runTurn` as a thin
   facade over the _current_ private methods first (user-facing win, no internal
   unification yet), then unify `_admitTurn` after recovery lands? This is the
@@ -721,13 +776,21 @@ Suggested implementation order (decouples from the recovery RFC's timeline):
 1. ✅ `addMessages()` — **done** (shipped ahead of the admission refactor; it has
    no dependency on it, and closed the `persistMessages` doc gap). Remaining work
    starts at step 2.
-2. `runTurn()` as a thin facade delegating to the existing
+2. ✅ `runTurn()` as a thin facade delegating to the existing
    `chat`/`saveMessages`/`submitMessages`/`continueLastTurn`. User-facing "smaller
    to learn" win with zero internal churn; safe even if the recovery RFC slips.
-3. After recovery RFC Phases 0-1 (ideally Phase 3): extract `_admitTurn` +
+   **Does not** implement the in-queue re-entrancy guard (deferred to step 3).
+   **Shipped** with per-mode option narrowing (see Status block).
+3. ✅ After recovery RFC Phases 0-1 (ideally Phase 3): extract `_admitTurn` +
    `TurnSpec`, repoint the existing methods and `runTurn` at it, and gate the
    change on the behavior-parity suite + the mapping table in section 2.
-4. Add `chat:turn:*` observability inside `_admitTurn`.
+   **Shipped** with an async-local re-entrancy guard for blocking
+   `wait`/`continuation`/`stream`, submission admission vs drain execution split,
+   and path-specific ordering preserved.
+4. ✅ Add `chat:turn:*` observability inside `_admitTurn`. **Shipped** as the
+   intentionally small `chat:turn:start` / `chat:turn:finish` pair around actual
+   queue execution. Durable submission acceptance does not emit a turn event; the
+   submission drain does.
 
 The `_admitTurn` step list in section 2 is the _logical_ sequence; exact ordering
 (e.g. WS persists/reconciles before enqueue) follows the current per-path code and

@@ -1,6 +1,6 @@
-import type { LanguageModel, UIMessage } from "ai";
+import type { LanguageModel, ToolSet, UIMessage } from "ai";
 import { hasToolCall, Output, tool } from "ai";
-import { defineScheduledTasks, Think } from "../../think";
+import { action, defineScheduledTasks, Think } from "../../think";
 import { Agent } from "agents";
 import type {
   AgentToolEventMessage,
@@ -24,6 +24,9 @@ import type {
   ThinkSubmissionInspection,
   ThinkSubmissionStatus,
   SubmitMessagesResult,
+  TurnResult,
+  RunTurnWait,
+  RunTurnOptions,
   MediaEvictionConfig,
   ThinkScheduledTask,
   ThinkScheduledTaskContext,
@@ -35,6 +38,9 @@ import type {
   ToolCallContext,
   ToolCallDecision,
   ToolCallResultContext,
+  Action,
+  ActionAuthorizationContext,
+  ActionAuthorizationDecision,
   StepContext,
   ChunkContext
 } from "../../think";
@@ -562,6 +568,19 @@ export class ThinkTestAgent extends Think {
     body?: RpcJsonObject;
   }> = [];
   private _beforeTurnMessagesJson: string[] = [];
+  private _capturedTurnChannels: string[] = [];
+
+  override configureChannels() {
+    return {
+      voice: {
+        kind: "voice" as const,
+        ingress: { transport: "voice" as const },
+        instructions: "VOICE MODE",
+        tools: () => ({}),
+        maxTurns: 3
+      }
+    };
+  }
   private _stepLog: Array<{
     finishReason: string;
     text: string;
@@ -605,7 +624,44 @@ export class ThinkTestAgent extends Think {
       body: ctx.body as RpcJsonObject | undefined
     });
     this._beforeTurnMessagesJson.push(JSON.stringify(ctx.messages));
+    this._capturedTurnChannels.push(this.activeChannel?.channelId ?? "");
     if (this._turnConfigOverride) return this._turnConfigOverride;
+  }
+
+  async getCapturedTurnChannelsForTest(): Promise<string[]> {
+    return this._capturedTurnChannels;
+  }
+
+  async runChannelTurnForTest(options: {
+    input?: string;
+    channel?: string;
+    continuation?: boolean;
+  }): Promise<void> {
+    if (options.continuation) {
+      await this.runTurn({ continuation: true, channel: options.channel });
+      return;
+    }
+    await this.runTurn({
+      input: options.input ?? "hi",
+      channel: options.channel
+    });
+  }
+
+  async renderAttachmentsForTest(
+    attachments: import("../../think").ReplyAttachment[]
+  ): Promise<UIMessage[]> {
+    await (
+      this as unknown as {
+        _renderChannelAttachments(
+          a: import("../../think").ReplyAttachment[]
+        ): Promise<void>;
+      }
+    )._renderChannelAttachments(attachments);
+    return this.getMessages();
+  }
+
+  async resetCapturedTurnChannelsForTest(): Promise<void> {
+    this._capturedTurnChannels = [];
   }
 
   async setTurnConfigOverride(config: TurnConfig | null): Promise<void> {
@@ -1326,7 +1382,10 @@ export class ThinkTestAgent extends Think {
         pending: Record<string, unknown> | null;
         awaitingConnections: Map<string, unknown>;
       };
-      _continuationTimer: ReturnType<typeof setTimeout> | null;
+      _autoContinuation: {
+        _timer: ReturnType<typeof setTimeout> | null;
+        cancelTimer(): void;
+      };
       _streamingAssistant: unknown;
     };
     // Seed a pending auto-continuation with `pastCoalesce: false` so the buggy
@@ -1349,7 +1408,8 @@ export class ThinkTestAgent extends Think {
       const first = await this.testChat("seeded pending, then stall");
       // Read synchronously: no `await` has yielded since the recovery `finally`
       // ran, so an erroneously armed 50ms timer cannot have fired yet.
-      const coalesceTimerArmedAfterStall = internal._continuationTimer !== null;
+      const coalesceTimerArmedAfterStall =
+        internal._autoContinuation._timer !== null;
       const streamingAssistantCleared = internal._streamingAssistant === null;
       const scheduledContinues =
         this.sql<{ count: number }>`
@@ -1365,10 +1425,7 @@ export class ThinkTestAgent extends Think {
     } finally {
       // Tear down the seeded pending + any armed timer so nothing leaks into a
       // later turn (and the seeded undefined connection never gets used).
-      if (internal._continuationTimer) {
-        clearTimeout(internal._continuationTimer);
-        internal._continuationTimer = null;
-      }
+      internal._autoContinuation.cancelTimer();
       internal._continuation.pending = null;
       internal._continuation.awaitingConnections.clear();
       this._stallAfterChunks = null;
@@ -1694,6 +1751,18 @@ export class ThinkTestAgent extends Think {
 
   async getSessionHistoryForTest(): Promise<UIMessage[]> {
     return (await this.session.getHistory()) as UIMessage[];
+  }
+
+  async deliverNoticeErrorForTest(
+    text: string,
+    channel?: string
+  ): Promise<string | null> {
+    try {
+      await this.deliverNotice(text, channel ? { channel } : undefined);
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
   }
 
   async enableCompactionForTest(): Promise<void> {
@@ -3075,6 +3144,153 @@ function createToolCallingMockModel(): LanguageModel {
   } as LanguageModel;
 }
 
+function createAttachReplyMockModel(): LanguageModel {
+  let callCount = 0;
+  return {
+    specificationVersion: "v3",
+    provider: "test",
+    modelId: "mock-attach-reply",
+    supportedUrls: {},
+    doGenerate() {
+      throw new Error("doGenerate not implemented");
+    },
+    doStream(options: Record<string, unknown>) {
+      callCount++;
+      const messages = (options as { prompt?: unknown[] }).prompt ?? [];
+      const hasToolResult = messages.some(
+        (m: unknown) =>
+          typeof m === "object" &&
+          m !== null &&
+          (m as Record<string, unknown>).role === "tool"
+      );
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: "stream-start", warnings: [] });
+          if (!hasToolResult && callCount === 1) {
+            controller.enqueue({
+              type: "tool-input-start",
+              id: "ar1",
+              toolName: "attachAction"
+            });
+            controller.enqueue({
+              type: "tool-input-delta",
+              id: "ar1",
+              delta: JSON.stringify({})
+            });
+            controller.enqueue({ type: "tool-input-end", id: "ar1" });
+            controller.enqueue({
+              type: "tool-call",
+              toolCallId: "ar1",
+              toolName: "attachAction",
+              input: JSON.stringify({})
+            });
+            controller.enqueue({
+              type: "finish",
+              finishReason: v3FinishReason("tool-calls"),
+              usage: v3Usage(10, 5)
+            });
+          } else {
+            controller.enqueue({ type: "text-start", id: "ar-final" });
+            controller.enqueue({
+              type: "text-delta",
+              id: "ar-final",
+              delta: "attached-done"
+            });
+            controller.enqueue({ type: "text-end", id: "ar-final" });
+            controller.enqueue({
+              type: "finish",
+              finishReason: v3FinishReason("stop"),
+              usage: v3Usage(20, 10)
+            });
+          }
+          controller.close();
+        }
+      });
+      return Promise.resolve({ stream });
+    }
+  } as LanguageModel;
+}
+
+// Calls the `pauseAction` durable-pause action on the first model step, then
+// emits text on every later step (within the parking turn and on the
+// connection-independent continuation after approval).
+function createDurablePauseMockModel(): LanguageModel {
+  let callCount = 0;
+  return {
+    specificationVersion: "v3",
+    provider: "test",
+    modelId: "mock-durable-pause",
+    supportedUrls: {},
+    doGenerate() {
+      throw new Error("doGenerate not implemented");
+    },
+    doStream(options: Record<string, unknown>) {
+      callCount++;
+      const messages = (options as { prompt?: unknown[] }).prompt ?? [];
+      const hasToolResult = messages.some(
+        (m: unknown) =>
+          typeof m === "object" &&
+          m !== null &&
+          (m as Record<string, unknown>).role === "tool"
+      );
+      // Only park when a user explicitly asked for it on this turn — so a
+      // post-resolution continuation (driven by a system note, no fresh user
+      // ask) responds with text instead of re-parking.
+      const userAskedToPause = messages.some((m: unknown) => {
+        if (typeof m !== "object" || m === null) return false;
+        const mm = m as Record<string, unknown>;
+        if (mm.role !== "user") return false;
+        return JSON.stringify(mm.content ?? "").includes("pauseAction");
+      });
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue({ type: "stream-start", warnings: [] });
+          if (!hasToolResult && callCount === 1 && userAskedToPause) {
+            controller.enqueue({
+              type: "tool-input-start",
+              id: "dp1",
+              toolName: "pauseAction"
+            });
+            controller.enqueue({
+              type: "tool-input-delta",
+              id: "dp1",
+              delta: JSON.stringify({ message: "hello" })
+            });
+            controller.enqueue({ type: "tool-input-end", id: "dp1" });
+            controller.enqueue({
+              type: "tool-call",
+              toolCallId: "dp1",
+              toolName: "pauseAction",
+              input: JSON.stringify({ message: "hello" })
+            });
+            controller.enqueue({
+              type: "finish",
+              finishReason: v3FinishReason("tool-calls"),
+              usage: v3Usage(10, 5)
+            });
+          } else {
+            const id = `dp-text-${callCount}`;
+            controller.enqueue({ type: "text-start", id });
+            controller.enqueue({
+              type: "text-delta",
+              id,
+              delta: "acknowledged"
+            });
+            controller.enqueue({ type: "text-end", id });
+            controller.enqueue({
+              type: "finish",
+              finishReason: v3FinishReason("stop"),
+              usage: v3Usage(20, 10)
+            });
+          }
+          controller.close();
+        }
+      });
+      return Promise.resolve({ stream });
+    }
+  } as LanguageModel;
+}
+
 // Emits a single tool call for whichever tool the turn forces via `toolChoice`
 // (or the first `think_final_answer*` tool advertised), with the configured
 // arguments. Mirrors how a real model terminates a structured workflow turn by
@@ -3148,6 +3364,11 @@ export class ThinkToolsTestAgent extends Think {
     previousStepCount: number;
     previousToolResultCount: number;
   }> = [];
+  private _responseLog: ChatResponseResult[] = [];
+
+  override onChatResponse(result: ChatResponseResult): void {
+    this._responseLog.push(result);
+  }
 
   override beforeStep(ctx: PrepareStepContext): StepConfig | void {
     this._beforeStepLog.push({
@@ -3171,10 +3392,13 @@ export class ThinkToolsTestAgent extends Think {
   }
 
   override getModel(): LanguageModel {
+    if (this._useAttachReplyAction) return createAttachReplyMockModel();
+    if (this._useDurablePauseAction) return createDurablePauseMockModel();
     return createToolCallingMockModel();
   }
 
-  override getTools() {
+  override getTools(): ToolSet {
+    if (this._useEchoAction) return {};
     const mode = this._echoExecuteMode;
     if (mode === "async-iterable") {
       // Regression for the wrapper bug where the original `execute`
@@ -3248,6 +3472,182 @@ export class ThinkToolsTestAgent extends Think {
     };
   }
 
+  override getActions(): Record<string, Action> {
+    const actions: Record<string, Action> = {};
+    if (this._useDurablePauseAction) {
+      const approval =
+        this._durablePauseApproval === "predicate-hello"
+          ? ({ input }: { input: { message: string } }) =>
+              input.message === "hello"
+          : this._durablePauseApproval;
+      actions.pauseAction = action({
+        name: "pauseAction",
+        description: "A durable-pause action awaiting human approval",
+        inputSchema: z.object({ message: z.string() }),
+        kind: "durable-pause",
+        approvalSummary: "Approve pause action",
+        approvalRisk: "high",
+        permissions: ["pause:run"],
+        idempotencyKey: this._durablePauseIdempotencyKey ?? undefined,
+        ...(approval !== undefined && { approval }),
+        execute: async ({ message }, ctx): Promise<unknown> => {
+          this._durablePauseExecCount++;
+          if (this._durablePauseAttachReply) {
+            ctx.attachReply({ type: "voice_note" });
+          }
+          if (this._durablePauseExecThrows) {
+            throw new Error("durable pause execute failed");
+          }
+          return `paused-exec: ${message}`;
+        }
+      });
+    }
+    if (this._useAttachReplyAction) {
+      const scenario = this._attachReplyScenario;
+      actions.attachAction = action({
+        name: "attachAction",
+        description: "Attach delivery metadata to the final reply",
+        inputSchema: z.object({}),
+        ...(scenario === "approval-gated" && {
+          approval: true,
+          approvalSummary: "Approve attach action",
+          approvalRisk: "low" as const
+        }),
+        ...(scenario === "predicate-noop" && {
+          approval: ({ ctx }) => {
+            ctx.attachReply({ type: "from_predicate" });
+            return false;
+          }
+        }),
+        ...(scenario === "permission-noop" && {
+          permissions: ({ ctx }) => {
+            ctx.attachReply({ type: "from_permission" });
+            return ["attach:run"];
+          }
+        }),
+        execute: async (_input, ctx): Promise<unknown> => {
+          if (scenario === "two") {
+            ctx.attachReply({ type: "voice_note" });
+            ctx.attachReply({ type: "card", payload: { id: 1 } });
+          } else if (scenario === "invalid") {
+            ctx.attachReply(null as never);
+            ctx.attachReply({} as never);
+            ctx.attachReply({ type: 123 } as never);
+          } else if (scenario === "non-json") {
+            const payload: { big: bigint; self?: unknown } = { big: 1n };
+            payload.self = payload;
+            ctx.attachReply({ type: "card", payload });
+          } else if (scenario === "overcap") {
+            for (let i = 0; i < 40; i++) {
+              ctx.attachReply({ type: "x", i });
+            }
+          } else if (scenario === "approval-gated") {
+            ctx.attachReply({ type: "voice_note" });
+          } else if (scenario === "attach-then-throw") {
+            ctx.attachReply({ type: "voice_note" });
+            throw new Error("attach action failed");
+          }
+          return "attached";
+        }
+      });
+    }
+    if (!this._useEchoAction) return actions;
+    const mode = this._actionExecuteMode;
+    return {
+      ...actions,
+      echo: action({
+        description: "Echo a message back as an action",
+        inputSchema: z.object({ message: z.string() }),
+        idempotencyKey:
+          mode === "attach-idempotency-key"
+            ? ({ ctx }) => {
+                ctx.attachReply({ type: "from_idempotency_key" });
+                return this._actionIdempotencyKey ?? "attach-idempotency-key";
+              }
+            : mode === "ledger-key" ||
+                mode === "ledger-throw" ||
+                mode === "ledger-large-output" ||
+                mode === "ledger-slow" ||
+                mode === "ledger-symbol-output" ||
+                mode === "ledger-approval" ||
+                mode === "attach-ledger"
+              ? (this._actionIdempotencyKey ?? "echo-ledger-key")
+              : undefined,
+        permissions:
+          mode === "permission" || mode === "approval-permission"
+            ? ["echo:run"]
+            : mode === "function-policy"
+              ? ({ input }) => [`echo:${input.message}`]
+              : undefined,
+        timeoutMs: mode === "timeout" ? 5 : undefined,
+        approval:
+          mode === "approval" ||
+          mode === "approval-permission" ||
+          mode === "ledger-approval"
+            ? true
+            : mode === "function-policy"
+              ? ({ input }) => input.message === "hello"
+              : undefined,
+        approvalSummary:
+          mode === "approval" ||
+          mode === "approval-permission" ||
+          mode === "function-policy" ||
+          mode === "ledger-approval"
+            ? "Approve echo action"
+            : undefined,
+        approvalRisk:
+          mode === "approval" ||
+          mode === "approval-permission" ||
+          mode === "ledger-approval"
+            ? "low"
+            : undefined,
+        execute: async ({ message }, ctx): Promise<unknown> => {
+          this._actionExecutionCount++;
+          this._lastActionContext = {
+            requestId: ctx.requestId,
+            toolCallId: ctx.toolCallId,
+            messageCount: ctx.messages.length
+          };
+          if (mode === "throw") {
+            throw new Error("action failed");
+          }
+          if (mode === "ledger-throw") {
+            throw new Error("ledger action failed");
+          }
+          if (mode === "timeout") {
+            await new Promise(() => {});
+          }
+          if (mode === "ledger-slow") {
+            await new Promise((resolve) =>
+              setTimeout(resolve, this._actionDelayMs)
+            );
+          }
+          if (mode === "large-output") {
+            return `echo: ${message} ${"x".repeat(25_000)}`;
+          }
+          if (mode === "ledger-large-output") {
+            return `echo: ${message} ${"x".repeat(25_000)}`;
+          }
+          if (mode === "non-json-output") {
+            const output: { count: bigint; self?: unknown } = { count: 12n };
+            output.self = output;
+            return output;
+          }
+          if (mode === "ledger-symbol-output") {
+            return Symbol("not-json");
+          }
+          if (mode === "attach-ledger") {
+            ctx.attachReply({ type: "voice_note" });
+          }
+          if (mode === "attach-idempotency-key") {
+            ctx.attachReply({ type: "voice_note" });
+          }
+          return `action echo: ${message}`;
+        }
+      })
+    };
+  }
+
   private _echoExecuteMode:
     | "default"
     | "async-iterable"
@@ -3256,11 +3656,430 @@ export class ThinkToolsTestAgent extends Think {
 
   private _midTurnInsideLoop: boolean | null = null;
   private _midTurnPersisted: boolean | null = null;
+  private _useEchoAction = false;
+  private _actionExecuteMode:
+    | "default"
+    | "throw"
+    | "timeout"
+    | "large-output"
+    | "non-json-output"
+    | "approval"
+    | "permission"
+    | "approval-permission"
+    | "function-policy"
+    | "ledger-key"
+    | "ledger-throw"
+    | "ledger-large-output"
+    | "ledger-slow"
+    | "ledger-symbol-output"
+    | "ledger-approval"
+    | "attach-ledger"
+    | "attach-idempotency-key" = "default";
+  private _actionExecutionCount = 0;
+  private _actionIdempotencyKey: string | null = null;
+  private _useAttachReplyAction = false;
+  private _attachReplyScenario:
+    | "two"
+    | "none"
+    | "invalid"
+    | "non-json"
+    | "overcap"
+    | "approval-gated"
+    | "predicate-noop"
+    | "permission-noop"
+    | "attach-then-throw" = "two";
+  private _useDurablePauseAction = false;
+  private _durablePauseApproval: boolean | "predicate-hello" | undefined =
+    undefined;
+  private _durablePauseIdempotencyKey: string | null = null;
+  private _durablePauseExecCount = 0;
+  private _durablePauseExecThrows = false;
+  private _durablePauseAttachReply = false;
+  private _actionDelayMs = 25;
+  private _actionGrantedPermissions: string[] | null | undefined = undefined;
+  private _denyActionReason: string | null = null;
+  private _lastActionContext: {
+    requestId: string;
+    toolCallId: string;
+    messageCount: number;
+  } | null = null;
 
   async setEchoExecuteMode(
     mode: "default" | "async-iterable" | "sync-iterable" | "add-messages"
   ): Promise<void> {
     this._echoExecuteMode = mode;
+  }
+
+  async useEchoActionForTest(
+    mode:
+      | "default"
+      | "throw"
+      | "timeout"
+      | "large-output"
+      | "non-json-output"
+      | "approval"
+      | "permission"
+      | "approval-permission"
+      | "function-policy"
+      | "ledger-key"
+      | "ledger-throw"
+      | "ledger-large-output"
+      | "ledger-slow"
+      | "ledger-symbol-output"
+      | "ledger-approval"
+      | "attach-ledger"
+      | "attach-idempotency-key" = "default"
+  ): Promise<void> {
+    this._useEchoAction = true;
+    this._actionExecuteMode = mode;
+  }
+
+  async useAttachReplyActionForTest(
+    scenario:
+      | "two"
+      | "none"
+      | "invalid"
+      | "non-json"
+      | "overcap"
+      | "approval-gated"
+      | "predicate-noop"
+      | "permission-noop"
+      | "attach-then-throw" = "two"
+  ): Promise<void> {
+    this._useAttachReplyAction = true;
+    this._attachReplyScenario = scenario;
+  }
+
+  async getResponseAttachmentsJson(): Promise<string> {
+    const last = this._responseLog[this._responseLog.length - 1];
+    return JSON.stringify(last?.attachments ?? null);
+  }
+
+  async getLastResponseRequestIdForTest(): Promise<string | null> {
+    const last = this._responseLog[this._responseLog.length - 1];
+    return last?.requestId ?? null;
+  }
+
+  async clearResponseLogForTest(): Promise<void> {
+    this._responseLog.length = 0;
+  }
+
+  async mutateLastResponseAttachmentForTest(): Promise<void> {
+    const attachment = this._responseLog.at(-1)?.attachments?.[0];
+    if (attachment !== undefined) {
+      (attachment as { type: string; mutated?: boolean }).type = "mutated";
+      (attachment as { type: string; mutated?: boolean }).mutated = true;
+    }
+  }
+
+  async replyAttachmentsJsonForTest(requestId?: string): Promise<string> {
+    return JSON.stringify(this.replyAttachments(requestId));
+  }
+
+  async setActionIdempotencyKey(key: string | null): Promise<void> {
+    this._actionIdempotencyKey = key;
+  }
+
+  async setActionDelayForTest(ms: number): Promise<void> {
+    this._actionDelayMs = ms;
+  }
+
+  async setActionLedgerRetentionForTest(
+    retention: Partial<{
+      settledMs: number | false;
+      pendingMs: number | false;
+      maxSweepRows: number;
+    }>
+  ): Promise<void> {
+    this.actionLedgerRetention = {
+      ...this.actionLedgerRetention,
+      ...retention
+    };
+  }
+
+  async setActionLedgerPendingRetryLeaseForTest(
+    ms: number | false
+  ): Promise<void> {
+    this.actionLedgerPendingRetryLeaseMs = ms;
+  }
+
+  async executeEchoActionToolForTest(message = "hello"): Promise<unknown> {
+    const tools = await (
+      this as unknown as { _compileActionTools: () => Promise<ToolSet> }
+    )._compileActionTools();
+    const echo = tools.echo as {
+      execute?: (
+        input: unknown,
+        options: {
+          toolCallId?: string;
+          messages?: [];
+          abortSignal?: AbortSignal;
+        }
+      ) => Promise<unknown>;
+    };
+    const result = await echo.execute?.(
+      { message },
+      { toolCallId: "tc-direct", messages: [] }
+    );
+    return typeof result === "symbol" ? { type: "symbol" } : result;
+  }
+
+  async executeEchoActionToolParallelForTest(): Promise<unknown[]> {
+    return Promise.all([
+      this.executeEchoActionToolForTest(),
+      this.executeEchoActionToolForTest()
+    ]);
+  }
+
+  async listActionLedgerRowsForTest(): Promise<
+    Array<{
+      key: string;
+      action_name: string;
+      input_hash: string;
+      status: string;
+      result_json: string | null;
+      updated_at: number;
+    }>
+  > {
+    (
+      this as unknown as { _ensureActionLedgerTable: () => void }
+    )._ensureActionLedgerTable();
+    return this.sql<{
+      key: string;
+      action_name: string;
+      input_hash: string;
+      status: string;
+      result_json: string | null;
+      updated_at: number;
+    }>`
+      SELECT key, action_name, input_hash, status, result_json, updated_at
+      FROM cf_think_action_ledger
+      ORDER BY key ASC
+    `;
+  }
+
+  async insertActionLedgerRowForTest(options: {
+    key: string;
+    actionName?: string;
+    input?: unknown;
+    status?: "pending" | "settled";
+    output?: unknown;
+    updatedAt?: number;
+  }): Promise<void> {
+    (
+      this as unknown as { _ensureActionLedgerTable: () => void }
+    )._ensureActionLedgerTable();
+    const inputHash = (
+      this as unknown as { _actionInputHash: (input: unknown) => string }
+    )._actionInputHash(options.input ?? { message: "hello" });
+    const output =
+      options.status === "settled"
+        ? JSON.stringify({
+            valuePresent: options.output !== undefined,
+            value: options.output
+          })
+        : null;
+    const now = options.updatedAt ?? Date.now();
+    this.sql`
+      INSERT INTO cf_think_action_ledger (
+        key, action_name, request_id, tool_call_id, input_hash, status,
+        result_json, created_at, updated_at
+      )
+      VALUES (
+        ${options.key}, ${options.actionName ?? "echo"}, ${null}, ${"tc-seeded"},
+        ${inputHash}, ${options.status ?? "pending"}, ${output}, ${now}, ${now}
+      )
+    `;
+  }
+
+  async sweepActionLedgerForTest(): Promise<{
+    settled: number;
+    pending: number;
+  }> {
+    return (
+      this as unknown as {
+        _sweepActionLedger: (options: {
+          force?: boolean;
+        }) => Promise<{ settled: number; pending: number }>;
+      }
+    )._sweepActionLedger({ force: true });
+  }
+
+  // ── Durable-pause action test helpers ───────────────────────────
+
+  async useDurablePauseActionForTest(options?: {
+    approval?: boolean | "predicate-hello";
+    idempotencyKey?: string;
+    execThrows?: boolean;
+    attachReply?: boolean;
+  }): Promise<void> {
+    this._useDurablePauseAction = true;
+    this._durablePauseApproval = options?.approval;
+    this._durablePauseIdempotencyKey = options?.idempotencyKey ?? null;
+    this._durablePauseExecThrows = options?.execThrows ?? false;
+    this._durablePauseAttachReply = options?.attachReply ?? false;
+  }
+
+  /** Drop the durable-pause action so a later approve can't re-derive it. */
+  async removeDurablePauseActionForTest(): Promise<void> {
+    this._useDurablePauseAction = false;
+  }
+
+  async getDurablePauseExecCount(): Promise<number> {
+    return this._durablePauseExecCount;
+  }
+
+  /** Compile tools and directly invoke the durable-pause action to park it. */
+  async parkDurablePauseForTest(
+    message = "hello",
+    toolCallId = `tc-pause-${crypto.randomUUID()}`
+  ): Promise<unknown> {
+    const tools = await (
+      this as unknown as { _compileActionTools: () => Promise<ToolSet> }
+    )._compileActionTools();
+    const pauseTool = tools.pauseAction as {
+      execute?: (
+        input: unknown,
+        options: {
+          toolCallId?: string;
+          messages?: [];
+          abortSignal?: AbortSignal;
+        }
+      ) => Promise<unknown>;
+    };
+    return pauseTool.execute?.({ message }, { toolCallId, messages: [] });
+  }
+
+  async listActionPendingForTest(): Promise<
+    Array<{
+      execution_id: string;
+      action_name: string;
+      tool_call_id: string;
+      input_json: string;
+      descriptor_json: string | null;
+    }>
+  > {
+    return (
+      this as unknown as {
+        _listActionPendingRows: () => Array<{
+          execution_id: string;
+          action_name: string;
+          tool_call_id: string;
+          input_json: string;
+          descriptor_json: string | null;
+        }>;
+      }
+    )._listActionPendingRows();
+  }
+
+  async approveExecutionForTest(executionId: string): Promise<unknown> {
+    return this.approveExecution(executionId);
+  }
+
+  async rejectExecutionForTest(
+    executionId: string,
+    reason?: string
+  ): Promise<unknown> {
+    return this.rejectExecution(executionId, reason);
+  }
+
+  async approveExecutionTwiceForTest(executionId: string): Promise<unknown[]> {
+    return Promise.all([
+      this.approveExecution(executionId),
+      this.approveExecution(executionId)
+    ]);
+  }
+
+  /** Returns a JSON string (RPC can't serialize the `unknown`-typed input). */
+  async pendingApprovalsForTest(executionId?: string): Promise<string> {
+    return JSON.stringify(await this.pendingApprovals(executionId));
+  }
+
+  async sweepActionPendingApprovalsForTest(): Promise<{ swept: number }> {
+    return (
+      this as unknown as {
+        _sweepActionPendingApprovals: (options: {
+          force?: boolean;
+        }) => Promise<{ swept: number }>;
+      }
+    )._sweepActionPendingApprovals({ force: true });
+  }
+
+  async setActionPendingApprovalTtlForTest(ttl: number | false): Promise<void> {
+    (
+      this as unknown as { actionPendingApprovalTtlMs: number | false }
+    ).actionPendingApprovalTtlMs = ttl;
+  }
+
+  async backdateActionPendingForTest(
+    executionId: string,
+    createdAt: number
+  ): Promise<void> {
+    this.sql`
+      UPDATE cf_think_action_pending_approvals
+      SET created_at = ${createdAt}
+      WHERE execution_id = ${executionId}
+    `;
+  }
+
+  /** Derive a descriptor for a paused output (codemode-style) for unit tests. */
+  async descriptorForPausedOutputForTest(
+    requestId: string,
+    toolCallId: string,
+    output: unknown
+  ): Promise<unknown> {
+    return (
+      this as unknown as {
+        _descriptorForPausedOutput: (
+          requestId: string,
+          toolCallId: string,
+          output: unknown
+        ) => unknown;
+      }
+    )._descriptorForPausedOutput(requestId, toolCallId, output);
+  }
+
+  /** Override describePausedExecution to enrich codemode descriptors. */
+  async setDescribePausedExecutionForTest(
+    override: {
+      summary?: string;
+      permissions?: string[];
+      risk?: "low" | "medium" | "high";
+    } | null
+  ): Promise<void> {
+    if (override === null) {
+      (
+        this as unknown as { describePausedExecution: unknown }
+      ).describePausedExecution = () => undefined;
+      return;
+    }
+    (
+      this as unknown as { describePausedExecution: unknown }
+    ).describePausedExecution = () => override;
+  }
+
+  async setActionGrantedPermissions(
+    permissions: string[] | null | undefined
+  ): Promise<void> {
+    this._actionGrantedPermissions = permissions;
+  }
+
+  async setDenyActionReason(reason: string | null): Promise<void> {
+    this._denyActionReason = reason;
+  }
+
+  async getActionProbe(): Promise<{
+    count: number;
+    context: {
+      requestId: string;
+      toolCallId: string;
+      messageCount: number;
+    } | null;
+  }> {
+    return {
+      count: this._actionExecutionCount,
+      context: this._lastActionContext
+    };
   }
 
   async getMidTurnAddProbe(): Promise<{
@@ -3283,6 +4102,25 @@ export class ThinkToolsTestAgent extends Think {
     if (this._turnStopCondition) {
       return { stopWhen: this._turnStopCondition };
     }
+  }
+
+  override authorizeTurn(): ActionAuthorizationDecision {
+    if (this._actionGrantedPermissions === undefined) return true;
+    return {
+      allowed: true,
+      ...(this._actionGrantedPermissions !== null && {
+        grantedPermissions: this._actionGrantedPermissions
+      })
+    };
+  }
+
+  override authorizeAction(
+    ctx: ActionAuthorizationContext
+  ): ActionAuthorizationDecision | Promise<ActionAuthorizationDecision> {
+    if (this._denyActionReason !== null) {
+      return { allowed: false, reason: this._denyActionReason };
+    }
+    return super.authorizeAction(ctx);
   }
 
   private _beforeToolCallThrowMessage: string | null = null;
@@ -3384,6 +4222,16 @@ export class ThinkProgrammaticTestAgent extends Think {
   private _submissionStatusDelayMs = 0;
   private _programmaticResponse = "Programmatic response";
   private _finalAnswerResponse: unknown = undefined;
+  private _nestedAdmissionMode:
+    | "wait"
+    | "continuation"
+    | "stream"
+    | "submit"
+    | "addMessages"
+    | null = null;
+  private _nestedAdmissionAttempted = false;
+  private _nestedAdmissionSucceeded = false;
+  private _nestedAdmissionError: string | null = null;
   private _inBandErrorResponse: {
     errorText: string;
     textChunks: string[];
@@ -3461,7 +4309,7 @@ export class ThinkProgrammaticTestAgent extends Think {
     this._submissionLog.push(result);
   }
 
-  override beforeTurn(ctx: TurnContext): void {
+  override async beforeTurn(ctx: TurnContext): Promise<void> {
     if (this._throwBeforeTurnError) {
       throw new Error(this._throwBeforeTurnError);
     }
@@ -3469,6 +4317,47 @@ export class ThinkProgrammaticTestAgent extends Think {
       continuation: ctx.continuation,
       body: ctx.body as RpcJsonObject | undefined
     });
+    if (this._nestedAdmissionMode && !this._nestedAdmissionAttempted) {
+      this._nestedAdmissionAttempted = true;
+      try {
+        await this._runNestedAdmissionForTest(this._nestedAdmissionMode);
+        this._nestedAdmissionSucceeded = true;
+      } catch (error) {
+        this._nestedAdmissionError =
+          error instanceof Error ? error.message : String(error);
+      }
+    }
+  }
+
+  private async _runNestedAdmissionForTest(
+    mode: Exclude<typeof this._nestedAdmissionMode, null>
+  ): Promise<void> {
+    const msg = {
+      id: crypto.randomUUID(),
+      role: "user" as const,
+      parts: [{ type: "text" as const, text: `nested ${mode}` }]
+    };
+    switch (mode) {
+      case "wait":
+        await this.runTurn({ mode: "wait", input: msg });
+        return;
+      case "continuation":
+        await this.runTurn({ mode: "wait", continuation: true });
+        return;
+      case "stream":
+        await this.runTurn({
+          mode: "stream",
+          input: msg,
+          callback: new TestCollectingCallback()
+        });
+        return;
+      case "submit":
+        await this.runTurn({ mode: "submit", input: msg });
+        return;
+      case "addMessages":
+        await this.addMessages([msg]);
+        return;
+    }
   }
 
   async setDelayedChunkResponse(
@@ -3594,6 +4483,124 @@ export class ThinkProgrammaticTestAgent extends Think {
 
   async testSaveMessages(msgs: UIMessage[]): Promise<SaveMessagesResult> {
     return this.saveMessages(msgs);
+  }
+
+  async testSaveMessagesEmptyFunction(): Promise<SaveMessagesResult> {
+    return this.saveMessages(() => []);
+  }
+
+  async runNestedAdmissionScenario(
+    mode: Exclude<typeof this._nestedAdmissionMode, null>
+  ): Promise<{
+    attempted: boolean;
+    succeeded: boolean;
+    error: string | null;
+  }> {
+    this._nestedAdmissionMode = mode;
+    this._nestedAdmissionAttempted = false;
+    this._nestedAdmissionSucceeded = false;
+    this._nestedAdmissionError = null;
+    await this.testChat(`outer ${mode}`);
+    this._nestedAdmissionMode = null;
+    return {
+      attempted: this._nestedAdmissionAttempted,
+      succeeded: this._nestedAdmissionSucceeded,
+      error: this._nestedAdmissionError
+    };
+  }
+
+  async testRunTurnWait(options: RunTurnWait): Promise<TurnResult> {
+    return this.runTurn(options);
+  }
+
+  async testRunTurnWaitString(text: string): Promise<TurnResult> {
+    return this.runTurn({ mode: "wait", input: text });
+  }
+
+  async testRunTurnWaitWithFn(text: string): Promise<TurnResult> {
+    return this.runTurn({
+      mode: "wait",
+      input: (current) => [
+        ...current,
+        {
+          id: crypto.randomUUID(),
+          role: "user" as const,
+          parts: [{ type: "text" as const, text }]
+        }
+      ]
+    });
+  }
+
+  async testRunTurnContinuation(
+    body?: Record<string, unknown>
+  ): Promise<TurnResult> {
+    return this.runTurn({ mode: "wait", continuation: true, body });
+  }
+
+  async testRunTurnSubmit(
+    text: string,
+    options?: {
+      submissionId?: string;
+      idempotencyKey?: string;
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<SubmitMessagesResult> {
+    return this.runTurn({ mode: "submit", input: text, ...options });
+  }
+
+  async testRunTurnStream(text: string): Promise<TestChatResult> {
+    const callback = new TestCollectingCallback();
+    await this.runTurn({ mode: "stream", input: text, callback });
+    return {
+      events: callback.events,
+      done: callback.doneCalled,
+      error: callback.errorMessage,
+      interruptedCalls: callback.interruptedCalls
+    };
+  }
+
+  async testRunTurnExpectError(
+    options: RunTurnOptions | Record<string, unknown>
+  ): Promise<{ name: string; message: string } | null> {
+    try {
+      const runTurnImpl = this.runTurn.bind(this) as (
+        options: RunTurnOptions
+      ) => Promise<TurnResult | SubmitMessagesResult | void>;
+      await runTurnImpl(options as RunTurnOptions);
+      return null;
+    } catch (error) {
+      return {
+        name: error instanceof Error ? error.name : "Error",
+        message: error instanceof Error ? error.message : String(error)
+      };
+    }
+  }
+
+  async testRunTurnSubmitWithFunction(): Promise<{
+    name: string;
+    message: string;
+  } | null> {
+    return this.testRunTurnExpectError({
+      mode: "submit",
+      input: () => []
+    });
+  }
+
+  async testRunTurnStreamWithArray(): Promise<{
+    name: string;
+    message: string;
+  } | null> {
+    return this.testRunTurnExpectError({
+      mode: "stream",
+      input: [
+        {
+          id: crypto.randomUUID(),
+          role: "user",
+          parts: [{ type: "text", text: "hi" }]
+        }
+      ],
+      callback: new TestCollectingCallback()
+    });
   }
 
   async testSubmitMessages(

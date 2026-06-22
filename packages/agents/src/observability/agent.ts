@@ -52,6 +52,52 @@ export type AgentObservabilityEvent =
       { submissionId: string; requestId?: string; error: string }
     >
   | BaseEvent<
+      "action:ledger:replayed",
+      { action: string; key: string; inputHash: string }
+    >
+  | BaseEvent<
+      "action:ledger:pending",
+      { action: string; key: string; inputHash: string }
+    >
+  | BaseEvent<
+      "action:ledger:conflict",
+      { action: string; key: string; inputHash: string }
+    >
+  | BaseEvent<"action:ledger:serialize_failed", { action: string; key: string }>
+  | BaseEvent<
+      "action:ledger:settled",
+      { action: string; key: string; inputHash: string }
+    >
+  | BaseEvent<
+      "action:ledger:reclaimed",
+      { action: string; key: string; inputHash: string; ageMs: number }
+    >
+  | BaseEvent<"action:ledger:swept", { settled: number; pending: number }>
+  | BaseEvent<
+      "action:pause:created",
+      { action: string; executionId: string; toolCallId: string }
+    >
+  | BaseEvent<"action:pause:approved", { action: string; executionId: string }>
+  | BaseEvent<"action:pause:rejected", { action: string; executionId: string }>
+  | BaseEvent<"action:pause:swept", { swept: number }>
+  | BaseEvent<
+      "action:reply-attached",
+      { action?: string; attachmentType: string }
+    >
+  | BaseEvent<
+      "channel:resolved",
+      { channel: string; kind: string; requestId?: string }
+    >
+  | BaseEvent<
+      "channel:delivered",
+      { channel: string; kind: string; turnEnded: boolean }
+    >
+  | BaseEvent<
+      "notice:delivered",
+      { channel: string; kind: string; informModel: boolean }
+    >
+  | BaseEvent<"notice:failed", { channel: string; error: string }>
+  | BaseEvent<
       "fiber:run:started",
       { fiberId: string; fiberName: string; managed?: boolean }
     >
@@ -146,6 +192,29 @@ export type AgentObservabilityEvent =
           | "transcript";
         messagesPersisted?: boolean;
         error: string;
+      }
+    >
+  | BaseEvent<
+      "chat:turn:start",
+      {
+        requestId: string;
+        trigger: string;
+        admission: string;
+        continuation?: boolean;
+        generation?: number;
+      }
+    >
+  | BaseEvent<
+      "chat:turn:finish",
+      {
+        requestId: string;
+        trigger: string;
+        admission: string;
+        continuation?: boolean;
+        generation?: number;
+        status: string;
+        durationMs: number;
+        error?: string;
       }
     >
   | BaseEvent<
