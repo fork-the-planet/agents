@@ -353,6 +353,16 @@ function actionErrorEnvelope(error: unknown): {
   };
 }
 
+function streamErrorToString(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
 function actionAuthorizationErrorEnvelope(
   reason: string | undefined,
   permissions: string[]
@@ -1016,6 +1026,7 @@ export interface StreamCallback {
 export interface StreamableResult {
   toUIMessageStream(options?: {
     sendReasoning?: boolean;
+    onError?: (error: unknown) => string;
   }): AsyncIterable<unknown>;
   output?: PromiseLike<unknown>;
 }
@@ -5177,8 +5188,11 @@ export class Think<
     }
 
     const streamResult = {
-      toUIMessageStream: () =>
-        result.toUIMessageStream({ sendReasoning: finalSendReasoning }),
+      toUIMessageStream: (options) =>
+        result.toUIMessageStream({
+          sendReasoning: options?.sendReasoning ?? finalSendReasoning,
+          onError: options?.onError ?? streamErrorToString
+        }),
       output: outputPromise
     } satisfies StreamableResult;
 
@@ -6270,12 +6284,13 @@ export class Think<
    * stream UIMessageChunk events via callback, and persist the
    * assistant's response.
    *
-   * @param userMessage The user's message (string or UIMessage)
+   * @param userMessage The user's message(s), or a callback that derives them
+   * from the in-queue transcript.
    * @param callback Streaming callback (typically an RpcTarget from the parent)
    * @param options Optional chat options (e.g. AbortSignal)
    */
   async chat(
-    userMessage: string | UIMessage,
+    userMessage: TurnInputMessages,
     callback: StreamCallback,
     options?: ChatOptions
   ): Promise<void> {
@@ -6322,20 +6337,14 @@ export class Think<
         continuation: false,
         channel: options?.channel,
         execute: async () => {
-          const baseUserMsg: UIMessage =
-            typeof userMessage === "string"
-              ? {
-                  id: crypto.randomUUID(),
-                  role: "user",
-                  parts: [{ type: "text", text: userMessage }]
-                }
-              : userMessage;
-          const userMsg = this._stampChannel(
-            [baseUserMsg],
-            options?.channel
-          )[0];
+          const resolved =
+            typeof userMessage === "function"
+              ? await userMessage(this.messages)
+              : this._normalizeChatMessages(userMessage);
 
-          await this._appendMessageToHistory(userMsg);
+          for (const msg of this._stampChannel(resolved, options?.channel)) {
+            await this._appendMessageToHistory(msg);
+          }
           this._broadcastMessages();
 
           const chatBody = async () => {
@@ -6547,27 +6556,27 @@ export class Think<
     return [input];
   }
 
+  private _normalizeChatMessages(
+    input: Exclude<
+      TurnInputMessages,
+      (current: UIMessage[]) => UIMessage[] | Promise<UIMessage[]>
+    >
+  ): UIMessage[] {
+    if (typeof input === "string") {
+      return [this._userMessageFromText(input)];
+    }
+    if (Array.isArray(input)) {
+      return input;
+    }
+    return [input];
+  }
+
   private _assertRunTurnSubmitInput(
     input: TurnInputMessages
   ): asserts input is string | UIMessage | UIMessage[] {
     if (typeof input === "function") {
       throw new Error(
         'runTurn({ mode: "submit" }) does not support function input until _admitTurn (step 3)'
-      );
-    }
-  }
-
-  private _assertRunTurnStreamInput(
-    input: TurnInputMessages
-  ): asserts input is string | UIMessage {
-    if (typeof input === "function") {
-      throw new Error(
-        'runTurn({ mode: "stream" }) does not support function input until _admitTurn (step 3)'
-      );
-    }
-    if (Array.isArray(input)) {
-      throw new Error(
-        'runTurn({ mode: "stream" }) does not support array input until _admitTurn (step 3)'
       );
     }
   }
@@ -6652,10 +6661,16 @@ export class Think<
       throw new TypeError('runTurn: mode "stream" requires input');
     }
 
-    this._assertRunTurnStreamInput(input);
-    const userMessage = input;
+    if (typeof input !== "function") {
+      const messages = this._normalizeRunTurnMessages(input);
+      if (messages.length === 0) {
+        await options.callback.onStart({ requestId: crypto.randomUUID() });
+        await options.callback.onDone();
+        return;
+      }
+    }
 
-    return this.chat(userMessage, options.callback, {
+    return this.chat(input, options.callback, {
       signal: options.signal,
       clientTools: options.clientTools,
       onClientToolCall: options.onClientToolCall,
@@ -10575,7 +10590,7 @@ export class Think<
       >();
       try {
         const guardedStream = iterateWithStallWatchdog(
-          result.toUIMessageStream(),
+          result.toUIMessageStream({ onError: streamErrorToString }),
           stallTimeoutMs,
           () => {
             this._emit("chat:stream:stalled", {
@@ -11011,7 +11026,7 @@ export class Think<
       this._insideInferenceLoop = true;
       try {
         const guardedStream = iterateWithStallWatchdog(
-          result.toUIMessageStream(),
+          result.toUIMessageStream({ onError: streamErrorToString }),
           stallTimeoutMs,
           () => {
             this._emit("chat:stream:stalled", {
