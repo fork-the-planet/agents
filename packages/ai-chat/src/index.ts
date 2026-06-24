@@ -58,6 +58,7 @@ import {
 import { MAX_BOUND_PARAMS, buildInClauseStrings } from "agents/chat";
 import {
   ContinuationState,
+  PreStreamTurns,
   AutoContinuationController,
   AbortRegistry,
   TIMED_OUT,
@@ -452,6 +453,23 @@ export class AIChatAgent<
    * connections awaiting a continuation stream to start.
    */
   private _continuation = new ContinuationState<Connection>();
+
+  /**
+   * Accepted-but-not-yet-streamed turns and the connections parked waiting for
+   * one (#1784). Lets a client that reconnects/re-mounts during a turn's
+   * pre-stream window (queue, MCP wait, model latency) keep waiting instead of
+   * giving up — see the {@link ResumeHandshake} `preStream` seam.
+   *
+   * HIBERNATION INVARIANT: this is in-memory only and is NOT persisted. It is
+   * safe precisely because the pre-stream window cannot overlap hibernation: a
+   * turn between `begin()` and `_startStream()` is an unresolved `onMessage`
+   * handler promise (queue/debounce/MCP/model awaits) that pins the DO in
+   * memory, so the DO is only evicted once the turn either recorded a durable
+   * stream (resumed via `ResumableStream` on wake) or finished. This breaks if a
+   * pre-stream wait is ever moved onto a durable alarm that releases the DO; if
+   * that changes, this state must become durable.
+   */
+  private _preStream = new PreStreamTurns<Connection>();
   private _agentToolForwarders = new Map<
     string,
     Set<(chunk: AgentToolStoredChunk) => void>
@@ -767,6 +785,11 @@ export class AIChatAgent<
       // Notify client about active streams that can be resumed
       if (this._resumableStream.hasActiveStream()) {
         this._notifyStreamResuming(connection);
+      } else if (this._preStream.park(connection)) {
+        // A turn is accepted but its stream hasn't started yet (#1784): park
+        // this connection and tell it to keep waiting. `park` sent the
+        // keep-waiting frame; the turn flushes it into STREAM_RESUMING on
+        // _startStream or releases it with STREAM_RESUME_NONE on settle.
       } else {
         // No active stream to resume: if a recovery is in progress (between
         // attempts — the interrupted stream ended and the continuation hasn't
@@ -796,6 +819,7 @@ export class AIChatAgent<
       // Clean up pending resume state for this connection
       this._pendingResumeConnections.delete(connection.id);
       this._continuation.releaseConnection(connection.id);
+      this._preStream.release(connection.id);
       // Call consumer's onClose
       return _onClose(connection, code, reason, wasClean);
     };
@@ -876,75 +900,54 @@ export class AIChatAgent<
           // user has moved on.
           await this._clearChatTerminal();
 
-          // Track that this request is past the concurrency decision but
-          // not yet enqueued in _turnQueue. Decremented synchronously
-          // before _runExclusiveChatTurn (which increments queuedCount).
-          const releasePendingEnqueue = this._submitConcurrency.beginEnqueue();
+          // Mark this turn as accepted-but-not-yet-streamed (#1784) so a client
+          // that reconnects/re-mounts before the stream starts is parked and
+          // told to keep waiting (see _resumeHandshake / onConnect), then
+          // flushed into STREAM_RESUMING on _startStream or released on settle.
+          this._preStream.begin(chatMessageId);
+
+          // Outer finally so the accepted pre-stream turn ALWAYS settles
+          // (#1784). begin() runs before the pre-turn-body steps below
+          // (persistMessages, _mergeQueuedUserMessages, and inside the queued
+          // execute callback mcp.waitForConnections / _setRequestContext); if
+          // any of those throws, chatTurnBody's own finally never runs. Without
+          // this backstop the request id would stay stuck in _preStream —
+          // hasInFlight() true forever — so every future client would be parked
+          // on STREAM_PENDING (60s) instead of getting an immediate
+          // STREAM_RESUME_NONE, until chat clear or DO eviction. Mirrors
+          // @cloudflare/think's _handleChatRequest.
           try {
-            // Persist and broadcast user messages before entering the turn
-            // queue so other tabs see the new message immediately and so
-            // overlapping submits under latest/merge/debounce can inspect
-            // the full message list when their turn starts.
-            this._broadcastChatMessage(
-              {
-                messages: transformedMessages,
-                type: MessageType.CF_AGENT_CHAT_MESSAGES
-              },
-              [connection.id]
-            );
+            // Track that this request is past the concurrency decision but
+            // not yet enqueued in _turnQueue. Decremented synchronously
+            // before _runExclusiveChatTurn (which increments queuedCount).
+            const releasePendingEnqueue =
+              this._submitConcurrency.beginEnqueue();
+            try {
+              // Persist and broadcast user messages before entering the turn
+              // queue so other tabs see the new message immediately and so
+              // overlapping submits under latest/merge/debounce can inspect
+              // the full message list when their turn starts.
+              this._broadcastChatMessage(
+                {
+                  messages: transformedMessages,
+                  type: MessageType.CF_AGENT_CHAT_MESSAGES
+                },
+                [connection.id]
+              );
 
-            await this.persistMessages(transformedMessages, [connection.id], {
-              _deleteStaleRows: true
-            });
+              await this.persistMessages(transformedMessages, [connection.id], {
+                _deleteStaleRows: true
+              });
 
-            if (concurrencyDecision.strategy === "merge") {
-              await this._mergeQueuedUserMessages(epoch);
-            }
-          } finally {
-            releasePendingEnqueue();
-          }
-          return this._runExclusiveChatTurn(
-            chatMessageId,
-            async () => {
-              if (
-                this._submitConcurrency.isSuperseded(
-                  concurrencyDecision.submitSequence
-                )
-              ) {
-                this._completeSkippedRequest(connection, chatMessageId);
-                return;
-              }
-
-              if (concurrencyDecision.debounceUntilMs !== null) {
-                await this._submitConcurrency.waitForTimestamp(
-                  concurrencyDecision.debounceUntilMs
-                );
-
-                if (this._turnQueue.generation !== epoch) {
-                  this._completeSkippedRequest(connection, chatMessageId);
-                  return;
-                }
-
-                if (
-                  this._submitConcurrency.isSuperseded(
-                    concurrencyDecision.submitSequence
-                  )
-                ) {
-                  this._completeSkippedRequest(connection, chatMessageId);
-                  return;
-                }
-              }
-
-              // Re-merge inside the lock: more overlapping submits may have
-              // persisted additional user messages while this turn was queued.
               if (concurrencyDecision.strategy === "merge") {
                 await this._mergeQueuedUserMessages(epoch);
-
-                if (this._turnQueue.generation !== epoch) {
-                  this._completeSkippedRequest(connection, chatMessageId);
-                  return;
-                }
-
+              }
+            } finally {
+              releasePendingEnqueue();
+            }
+            await this._runExclusiveChatTurn(
+              chatMessageId,
+              async () => {
                 if (
                   this._submitConcurrency.isSuperseded(
                     concurrencyDecision.submitSequence
@@ -953,101 +956,155 @@ export class AIChatAgent<
                   this._completeSkippedRequest(connection, chatMessageId);
                   return;
                 }
-              }
 
-              // Optionally wait for in-flight MCP connections to settle (e.g. after hibernation restore)
-              // so that getAITools() returns the full set of tools in onChatMessage
-              if (this.waitForMcpConnections) {
-                const timeout =
-                  typeof this.waitForMcpConnections === "object"
-                    ? this.waitForMcpConnections.timeout
-                    : undefined;
-                await this.mcp.waitForConnections(
-                  timeout != null ? { timeout } : undefined
-                );
-              }
+                if (concurrencyDecision.debounceUntilMs !== null) {
+                  await this._submitConcurrency.waitForTimestamp(
+                    concurrencyDecision.debounceUntilMs
+                  );
 
-              this._setRequestContext(requestClientTools, requestBody);
+                  if (this._turnQueue.generation !== epoch) {
+                    this._completeSkippedRequest(connection, chatMessageId);
+                    return;
+                  }
 
-              this._emit("message:request");
+                  if (
+                    this._submitConcurrency.isSuperseded(
+                      concurrencyDecision.submitSequence
+                    )
+                  ) {
+                    this._completeSkippedRequest(connection, chatMessageId);
+                    return;
+                  }
+                }
 
-              const abortSignal = this._abortRegistry.getSignal(chatMessageId);
+                // Re-merge inside the lock: more overlapping submits may have
+                // persisted additional user messages while this turn was queued.
+                if (concurrencyDecision.strategy === "merge") {
+                  await this._mergeQueuedUserMessages(epoch);
 
-              return this._tryCatchChat(async () => {
-                // Wrap in agentContext.run() to propagate connection context to onChatMessage
-                // This ensures getCurrentAgent() returns the connection inside tool execute functions
-                return agentContext.run(
-                  {
-                    agent: this,
-                    connection,
-                    request: undefined,
-                    email: undefined
-                  },
-                  async () => {
-                    const chatTurnBody = async () => {
-                      try {
-                        await this._repairInterruptedToolsBeforeTurn();
-                        const response = await this.onChatMessage(
-                          async (_finishResult) => {
-                            // User-provided hook. Cleanup is now handled by _reply,
-                            // so this is optional for the user to pass to streamText.
-                          },
-                          {
-                            requestId: chatMessageId,
-                            abortSignal,
-                            clientTools: requestClientTools,
-                            body: requestBody,
-                            continuation: false
-                          }
-                        );
+                  if (this._turnQueue.generation !== epoch) {
+                    this._completeSkippedRequest(connection, chatMessageId);
+                    return;
+                  }
 
-                        if (response) {
-                          await this._reply(
-                            chatMessageId,
-                            response,
-                            [connection.id],
+                  if (
+                    this._submitConcurrency.isSuperseded(
+                      concurrencyDecision.submitSequence
+                    )
+                  ) {
+                    this._completeSkippedRequest(connection, chatMessageId);
+                    return;
+                  }
+                }
+
+                // Optionally wait for in-flight MCP connections to settle (e.g. after hibernation restore)
+                // so that getAITools() returns the full set of tools in onChatMessage
+                if (this.waitForMcpConnections) {
+                  const timeout =
+                    typeof this.waitForMcpConnections === "object"
+                      ? this.waitForMcpConnections.timeout
+                      : undefined;
+                  await this.mcp.waitForConnections(
+                    timeout != null ? { timeout } : undefined
+                  );
+                }
+
+                this._setRequestContext(requestClientTools, requestBody);
+
+                this._emit("message:request");
+
+                const abortSignal =
+                  this._abortRegistry.getSignal(chatMessageId);
+
+                return this._tryCatchChat(async () => {
+                  // Wrap in agentContext.run() to propagate connection context to onChatMessage
+                  // This ensures getCurrentAgent() returns the connection inside tool execute functions
+                  return agentContext.run(
+                    {
+                      agent: this,
+                      connection,
+                      request: undefined,
+                      email: undefined
+                    },
+                    async () => {
+                      const chatTurnBody = async () => {
+                        try {
+                          await this._repairInterruptedToolsBeforeTurn();
+                          const response = await this.onChatMessage(
+                            async (_finishResult) => {
+                              // User-provided hook. Cleanup is now handled by _reply,
+                              // so this is optional for the user to pass to streamText.
+                            },
                             {
-                              chatMessageId
+                              requestId: chatMessageId,
+                              abortSignal,
+                              clientTools: requestClientTools,
+                              body: requestBody,
+                              continuation: false
                             }
                           );
-                        } else {
-                          console.warn(
-                            `[AIChatAgent] onChatMessage returned no response for chatMessageId: ${chatMessageId}`
-                          );
-                          this._broadcastChatMessage(
-                            {
-                              body: "No response was generated by the agent.",
-                              done: true,
-                              id: chatMessageId,
-                              type: MessageType.CF_AGENT_USE_CHAT_RESPONSE
-                            },
-                            [connection.id]
-                          );
-                        }
-                      } finally {
-                        this._abortRegistry.remove(chatMessageId);
-                      }
-                    };
 
-                    if (this.chatRecovery) {
-                      await this._runChatRecoveryFiber(
-                        chatMessageId,
-                        false,
-                        chatTurnBody
-                      );
-                    } else {
-                      await chatTurnBody();
+                          if (response) {
+                            await this._reply(
+                              chatMessageId,
+                              response,
+                              [connection.id],
+                              {
+                                chatMessageId
+                              }
+                            );
+                          } else {
+                            console.warn(
+                              `[AIChatAgent] onChatMessage returned no response for chatMessageId: ${chatMessageId}`
+                            );
+                            this._broadcastChatMessage(
+                              {
+                                body: "No response was generated by the agent.",
+                                done: true,
+                                id: chatMessageId,
+                                type: MessageType.CF_AGENT_USE_CHAT_RESPONSE
+                              },
+                              [connection.id]
+                            );
+                          }
+                        } finally {
+                          this._abortRegistry.remove(chatMessageId);
+                          // Settle the pre-stream turn on the normal path (#1784):
+                          // a no-op release when the turn streamed (already flushed
+                          // into STREAM_RESUMING on _startStream) or a release on
+                          // the no-response path. A throw BEFORE chatTurnBody runs
+                          // is caught by the outer finally instead.
+                          this._settlePreStreamTurn(chatMessageId);
+                        }
+                      };
+
+                      if (this.chatRecovery) {
+                        await this._runChatRecoveryFiber(
+                          chatMessageId,
+                          false,
+                          chatTurnBody
+                        );
+                      } else {
+                        await chatTurnBody();
+                      }
                     }
-                  }
-                );
-              });
-            },
-            {
-              epoch,
-              onStale: () =>
-                this._completeSkippedRequest(connection, chatMessageId)
-            }
-          );
+                  );
+                });
+              },
+              {
+                epoch,
+                onStale: () =>
+                  this._completeSkippedRequest(connection, chatMessageId)
+              }
+            );
+          } finally {
+            // Guaranteed settle (#1784): on the happy path chatTurnBody /
+            // _completeSkippedRequest already settled (idempotent here); this
+            // covers a throw in a pre-turn-body step before chatTurnBody's
+            // finally could run.
+            this._settlePreStreamTurn(chatMessageId);
+          }
+          return;
         }
 
         // Handle clear chat
@@ -1060,6 +1117,8 @@ export class AIChatAgent<
           await this._clearChatTerminal();
           this._resumableStream.clearAll();
           this._pendingResumeConnections.clear();
+          this._preStream.releaseAwaiting();
+          this._preStream.reset();
           this._lastClientTools = undefined;
           this._lastBody = undefined;
           this._persistRequestContext();
@@ -1267,9 +1326,13 @@ export class AIChatAgent<
       responseMessageType: MessageType.CF_AGENT_USE_CHAT_RESPONSE,
       resumableStream: this._resumableStream,
       continuation: this._continuation,
+      preStream: this._preStream,
       pendingResumeConnections: this._pendingResumeConnections,
       pendingChatTerminal: () => this._pendingChatTerminal(),
-      persistOrphanedStream: (streamId) => this._persistOrphanedStream(streamId)
+      persistOrphanedStream: (streamId) =>
+        this._persistOrphanedStream(streamId),
+      isConnectionPresent: (connectionId) =>
+        this._isConnectionPresent(connectionId)
     }));
   }
 
@@ -1304,6 +1367,12 @@ export class AIChatAgent<
     options: { messageId?: string; continuation?: boolean } = {}
   ): string {
     const streamId = this._resumableStream.start(requestId, options);
+    // Flush connections parked during this turn's pre-stream window (#1784)
+    // into the normal STREAM_RESUMING path now that a stream exists. Safe for
+    // every turn — the awaiting set is empty unless a client reconnected before
+    // the first chunk. (Continuation-turn parks live in `_continuation` and are
+    // flushed below.)
+    this._preStream.flushOnStreamStart((c) => this._notifyStreamResuming(c));
     if (this._continuation.pending?.requestId === requestId) {
       this._continuation.activatePending();
       this._flushAwaitingStreamStartConnections();
@@ -1999,6 +2068,40 @@ export class AIChatAgent<
       id: requestId,
       type: MessageType.CF_AGENT_USE_CHAT_RESPONSE
     });
+    // A skipped turn settles out of the pre-stream set, but must NOT release
+    // parked connections (#1784): a skip happens because a NEWER turn was
+    // admitted (latest/merge supersede) or the queue generation advanced. The
+    // earliest "successor exists" signal (`SubmitConcurrencyController.decide`)
+    // fires before the successor's `_preStream.begin()`, so releasing here would
+    // race a `begin()` that hasn't run yet and cut a parked client loose right
+    // before the successor streams. Leave it parked: the successor flushes it on
+    // `_startStream`, or the final surviving turn's settle releases it. (Chat
+    // clear releases parked connections explicitly via `resetTurnState`.)
+    this._settlePreStreamTurn(requestId, { releaseParked: false });
+  }
+
+  /** Whether a connection with this id is still attached. */
+  private _isConnectionPresent(connectionId: string): boolean {
+    return this.getConnection(connectionId) !== undefined;
+  }
+
+  /**
+   * Mark an accepted turn (#1784) as settled. When `releaseParked` (the default)
+   * and no accepted turn remains in flight and no stream is active, release every
+   * parked connection with STREAM_RESUME_NONE so a client that reconnected during
+   * the pre-stream window stops waiting. A no-op when the parked set was already
+   * flushed on stream start. Skip paths pass `releaseParked: false` so a parked
+   * client survives onto the successor turn (see `_completeSkippedRequest`).
+   */
+  private _settlePreStreamTurn(
+    requestId: string,
+    options: { releaseParked?: boolean } = {}
+  ): void {
+    const idle = this._preStream.settle(requestId);
+    const releaseParked = options.releaseParked ?? true;
+    if (releaseParked && idle && !this._resumableStream.hasActiveStream()) {
+      this._preStream.releaseAwaiting();
+    }
   }
 
   private _rollbackDroppedSubmit(connection: Connection) {
@@ -2156,6 +2259,8 @@ export class AIChatAgent<
     this._streamingTurnActive = false;
     this._continuation.sendResumeNone();
     this._continuation.clearAll();
+    this._preStream.releaseAwaiting();
+    this._preStream.reset();
     this._pendingChatResponseResults.length = 0;
   }
 
