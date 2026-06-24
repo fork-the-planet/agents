@@ -1,4 +1,3 @@
-import type { UIMessage } from "ai";
 import type { Agent, SubAgentClass } from "./index";
 
 export type AgentToolRunStatus =
@@ -219,7 +218,11 @@ export type AgentToolEventMessage = {
   event: AgentToolEvent;
 };
 
-export type AgentToolRunState = {
+export type AgentToolRunPart = { type: string };
+
+export type AgentToolRunState<
+  Part extends AgentToolRunPart = AgentToolRunPart
+> = {
   runId: string;
   agentType: string;
   parentToolCallId?: string;
@@ -227,7 +230,15 @@ export type AgentToolRunState = {
   order: number;
   display?: AgentToolDisplayMetadata;
   status: "running" | "completed" | "error" | "aborted" | "interrupted";
-  parts: UIMessage["parts"];
+  /**
+   * Message parts reconstructed from the child agent's streamed chunks.
+   *
+   * The default stays framework-neutral so importing `agents` does not require
+   * an AI SDK peer. AI SDK consumers can use
+   * `AgentToolRunState<UIMessage["parts"][number]>` when they need its exact
+   * discriminated union.
+   */
+  parts: Part[];
   summary?: string;
   error?: string;
   /**
@@ -240,8 +251,10 @@ export type AgentToolRunState = {
   subAgent: { agent: string; name: string };
 };
 
-export type AgentToolEventState = {
-  runsById: Record<string, AgentToolRunState>;
-  runsByToolCallId: Record<string, AgentToolRunState[]>;
-  unboundRuns: AgentToolRunState[];
+export type AgentToolEventState<
+  Part extends AgentToolRunPart = AgentToolRunPart
+> = {
+  runsById: Record<string, AgentToolRunState<Part>>;
+  runsByToolCallId: Record<string, AgentToolRunState<Part>[]>;
+  unboundRuns: AgentToolRunState<Part>[];
 };
