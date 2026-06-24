@@ -65,7 +65,8 @@ import type {
   WorkflowEventPayload,
   WorkflowInfo,
   WorkflowQueryCriteria,
-  WorkflowPage
+  WorkflowPage,
+  AgentWorkflowOrigin
 } from "./workflow-types";
 import { MCPConnectionState } from "./mcp/client-connection";
 import {
@@ -5778,6 +5779,69 @@ export class Agent<
   }
 
   /**
+   * Invoke an RPC method on this Agent or a descendant facet identified
+   * by a root-first path. Used by AgentWorkflow to route callbacks and
+   * `this.agent` calls back to the exact sub-agent that started a workflow.
+   * @internal
+   */
+  async _cf_invokeAgentPath(
+    targetPath: ReadonlyArray<AgentPathStep>,
+    method: string,
+    args: unknown[]
+  ): Promise<unknown> {
+    await this.__unsafe_ensureInitialized();
+
+    const selfPath = this.selfPath;
+    if (!this._isSameAgentPathPrefix(selfPath, targetPath)) {
+      throw new Error(
+        `Workflow origin path does not descend from ${JSON.stringify(selfPath)}.`
+      );
+    }
+
+    if (selfPath.length === targetPath.length) {
+      // Match real DO-stub RPC semantics: refuse JS-internal probes
+      // (`constructor`, `toString`, symbol keys, thenable checks, …) and
+      // anything inherited from `Object.prototype` so a facet-origin workflow
+      // cannot reach a method surface a top-level workflow's stub would deny.
+      // The framework's own `_workflow_*` / `_cf_*` RPC methods and any
+      // user-defined Agent methods live on the subclass prototype, not
+      // `Object.prototype`, so they remain callable.
+      const target = this as unknown as Record<string, unknown>;
+      const fn = target[method];
+      if (
+        isInternalJsStubProp(method) ||
+        method in Object.prototype ||
+        typeof fn !== "function"
+      ) {
+        throw new Error(
+          `Workflow origin method "${method}" is not callable on ${this.constructor.name}.`
+        );
+      }
+      return await (fn as (...methodArgs: unknown[]) => unknown).apply(
+        this,
+        args
+      );
+    }
+
+    const next = targetPath[selfPath.length];
+    if (!this.hasSubAgent(next.className, next.name)) {
+      throw new Error(
+        `Workflow origin sub-agent ${next.className} "${next.name}" no longer exists.`
+      );
+    }
+
+    const stub = await this._cf_resolveSubAgent(next.className, next.name);
+    const handle = stub as unknown as {
+      _cf_invokeAgentPath(
+        path: ReadonlyArray<AgentPathStep>,
+        method: string,
+        args: unknown[]
+      ): Promise<unknown>;
+    };
+    return await handle._cf_invokeAgentPath(targetPath, method, args);
+  }
+
+  /**
    * Recursively destroy a descendant facet identified by
    * `targetPath`. Walks down from `selfPath` until reaching the
    * target's immediate parent, where it cancels the target's
@@ -9193,6 +9257,11 @@ export class Agent<
     // Record before initialization so a successfully-initialized facet is
     // not left without identity metadata if the parent is interrupted after
     // the child RPC returns. Roll back only rows this call created.
+    //
+    // A facet may start a workflow from onStart(); workflow callbacks route
+    // through the parent registry and must be able to find this in-flight
+    // child, so recording before the init RPC is also what lets those
+    // callbacks resolve.
     this._recordSubAgent(className, name, identity);
 
     // Initialize the child as a facet via a single RPC that runs
@@ -9668,10 +9737,29 @@ export class Agent<
    * Start a workflow and track it in this Agent's database.
    * Automatically injects agent identity into the workflow params.
    *
+   * The originating Agent identity is persisted in the workflow params so
+   * callbacks (`this.agent` RPC, progress/completion/error, state updates)
+   * route back to the exact Agent or sub-agent facet that started the run.
+   * Note the following constraints:
+   *
+   * - **Resolution is by name.** Callbacks re-resolve the originating Agent via
+   *   `getAgentByName(...)`. Agents addressed by a raw Durable Object id
+   *   (`idFromString`/`get(id)`) rather than by name will not receive
+   *   callbacks on the same instance.
+   * - **Sub-agent runs are facet-local.** A workflow started from a sub-agent
+   *   is tracked in that facet's own storage; the parent's `getWorkflows()` /
+   *   `getWorkflowById()` do not see it. Aggregate across facets yourself if
+   *   you need a combined view.
+   * - **Class names must survive bundling.** The originating path is keyed by
+   *   `constructor.name`. Ensure your bundler preserves class names
+   *   (e.g. esbuild `keepNames: true`) so callbacks can be routed.
+   *
    * @template P - Type of params to pass to the workflow
    * @param workflowName - Name of the workflow binding in env (e.g., 'MY_WORKFLOW')
    * @param params - Params to pass to the workflow
-   * @param options - Optional workflow options
+   * @param options - Optional workflow options. For sub-agents, pass
+   *   `agentBinding` as the **root** Agent's Durable Object binding name, not a
+   *   child binding.
    * @returns The workflow instance ID
    *
    * @example
@@ -9695,10 +9783,10 @@ export class Agent<
       );
     }
 
-    // Find the binding name for this Agent's namespace
-    const agentBindingName =
-      options?.agentBinding ?? this._findAgentBindingName();
-    if (!agentBindingName) {
+    // Find the binding name for the top-level Agent namespace. Facets
+    // are resolved later from this root binding plus their selfPath.
+    const agentOrigin = this._workflowOrigin(options);
+    if (!agentOrigin) {
       throw new Error(
         "Could not detect Agent binding name from class name. " +
           "Pass it explicitly via options.agentBinding"
@@ -9712,8 +9800,12 @@ export class Agent<
     const augmentedParams = {
       ...params,
       __agentName: this.name,
-      __agentBinding: agentBindingName,
-      __workflowName: workflowName
+      __agentBinding:
+        agentOrigin.kind === "agent"
+          ? agentOrigin.binding
+          : agentOrigin.rootBinding,
+      __workflowName: workflowName,
+      __agentOrigin: agentOrigin
     };
 
     // Create the workflow instance
@@ -10493,12 +10585,39 @@ export class Agent<
     };
   }
 
-  /**
-   * Find the binding name for this Agent's namespace by matching class name.
-   * Returns undefined if no match found - use options.agentBinding as fallback.
-   */
-  private _findAgentBindingName(): string | undefined {
-    const className = this._ParentClass.name;
+  private _workflowOrigin(
+    options: RunWorkflowOptions | undefined
+  ): AgentWorkflowOrigin | undefined {
+    if (this._isFacet) {
+      const root = this._parentPath[0];
+      const rootBindingName =
+        options?.agentBinding ??
+        (root ? this._findAgentBindingNameForClass(root.className) : undefined);
+
+      if (!rootBindingName) return undefined;
+
+      return {
+        kind: "facet",
+        version: 1,
+        rootBinding: rootBindingName,
+        path: this.selfPath.map((step) => ({ ...step }))
+      };
+    }
+
+    const agentBindingName =
+      options?.agentBinding ??
+      this._findAgentBindingNameForClass(this._ParentClass.name);
+    if (!agentBindingName) return undefined;
+
+    return {
+      kind: "agent",
+      version: 1,
+      binding: agentBindingName,
+      name: this.name
+    };
+  }
+
+  private _findAgentBindingNameForClass(className: string): string | undefined {
     for (const [key, value] of Object.entries(
       this.env as Record<string, unknown>
     )) {
@@ -10585,7 +10704,9 @@ export class Agent<
 
   /**
    * Handle a callback from a workflow.
-   * Called when the Agent receives a callback at /_workflow/callback.
+   * Invoked via the internal `_workflow_handleCallback` RPC whenever an
+   * {@link AgentWorkflow} reports progress, completion, an error, or a custom
+   * event back to its originating Agent (or sub-agent facet).
    * Override this to handle all callback types in one place.
    *
    * @param callback - The callback payload
