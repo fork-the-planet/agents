@@ -13,7 +13,7 @@
  *
  *     async onTurn(transcript, context) {
  *       const result = streamText({ ... });
- *       return result.textStream;
+ *       return result.fullStream;
  *     }
  *   }
  *
@@ -27,7 +27,12 @@
 
 import type { Agent, Connection, WSMessage } from "agents";
 import { SentenceChunker } from "./sentence-chunker";
-import { iterateText, type TextSource } from "./text-stream";
+import {
+  iterateText,
+  iterateTextEvents,
+  type TextSource,
+  type TextStreamEvent
+} from "./text-stream";
 import { VOICE_PROTOCOL_VERSION } from "./types";
 import type {
   VoiceRole,
@@ -340,7 +345,7 @@ export function withVoice<TBase extends AgentLike>(
       _context: VoiceTurnContext
     ): Promise<TextSource> {
       throw new Error(
-        "VoiceAgent subclass must implement onTurn(). Return a string, AsyncIterable<string>, or ReadableStream."
+        "VoiceAgent subclass must implement onTurn(). Return a string, AI SDK fullStream, AsyncIterable<string>, or ReadableStream."
       );
     }
 
@@ -833,7 +838,7 @@ export function withVoice<TBase extends AgentLike>(
 
       return this.#streamingTTSPipeline(
         connection,
-        iterateText(response),
+        iterateTextEvents(response),
         llmStart,
         pipelineStart,
         signal
@@ -842,7 +847,7 @@ export function withVoice<TBase extends AgentLike>(
 
     async #streamingTTSPipeline(
       connection: Connection,
-      tokenStream: AsyncIterable<string>,
+      tokenStream: AsyncIterable<TextStreamEvent>,
       llmStart: number,
       pipelineStart: number,
       signal: AbortSignal
@@ -863,6 +868,8 @@ export function withVoice<TBase extends AgentLike>(
       let streamComplete = false;
       let drainNotify: (() => void) | null = null;
       let drainPending = false;
+      let drainedCount = 0;
+      const drainWaiters = new Map<number, (() => void)[]>();
 
       const notifyDrain = () => {
         if (drainNotify) {
@@ -872,6 +879,24 @@ export function withVoice<TBase extends AgentLike>(
         } else {
           drainPending = true;
         }
+      };
+
+      const notifyDrained = () => {
+        for (const [target, waiters] of drainWaiters) {
+          if (drainedCount < target) continue;
+          drainWaiters.delete(target);
+          for (const resolve of waiters) resolve();
+        }
+      };
+
+      const waitForDrained = (target: number): Promise<void> => {
+        if (drainedCount >= target) return Promise.resolve();
+
+        return new Promise<void>((resolve) => {
+          const waiters = drainWaiters.get(target) ?? [];
+          waiters.push(resolve);
+          drainWaiters.set(target, waiters);
+        });
       };
 
       const tts = this.#requireTTS();
@@ -912,6 +937,8 @@ export function withVoice<TBase extends AgentLike>(
             });
           }
           i++;
+          drainedCount = i;
+          notifyDrained();
         }
       })();
 
@@ -970,8 +997,35 @@ export function withVoice<TBase extends AgentLike>(
         this.#sendJSON(connection, { type: "transcript_delta", text: token });
       };
 
-      for await (const token of tokenStream) {
+      for await (const event of tokenStream) {
         if (signal.aborted) break;
+
+        if (event.type === "boundary") {
+          for (const sentence of chunker.flush()) {
+            enqueueSentence(sentence);
+          }
+          await waitForDrained(ttsQueue.length);
+          continue;
+        }
+
+        if (event.type === "error") {
+          for (const sentence of chunker.flush()) {
+            enqueueSentence(sentence);
+          }
+          await waitForDrained(ttsQueue.length);
+          if (transcriptStarted) {
+            this.#sendJSON(connection, {
+              type: "transcript_end",
+              text: fullText
+            });
+          }
+          streamComplete = true;
+          notifyDrain();
+          await drainPromise;
+          throw event.error;
+        }
+
+        const token = event.text;
 
         fullText += token;
         sendAssistantDelta(token);
