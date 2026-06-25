@@ -21,7 +21,11 @@
   "targetDefaults": {
     "build": {
       "dependsOn": ["^build"],
-      "inputs": ["production", "^production"],
+      "inputs": [
+        "production",
+        "^production",
+        "{workspaceRoot}/scripts/format-declarations.ts"
+      ],
       "outputs": ["{projectRoot}/dist"],
       "cache": true
     },
