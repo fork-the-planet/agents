@@ -12,7 +12,7 @@ import { createWorkersAI } from "workers-ai-provider";
 import { initDatabase, createTools } from "./tools";
 
 export class Codemode extends AIChatAgent<Env> {
-  tools!: ReturnType<typeof createTools>;
+  declare tools: ReturnType<typeof createTools>;
 
   async onStart() {
     initDatabase(this.ctx.storage.sql);
