@@ -361,6 +361,20 @@ export function applyChunkToParts(
       const toolPart = findToolPartByCallId(parts, chunk.toolCallId);
       if (toolPart) {
         const p = toolPart as Record<string, unknown>;
+        // First-write-wins: a continuation can replay the prior tool
+        // round-trip and re-emit `tool-approval-request`. Never regress a part
+        // the user has already responded to (`approval-responded`) or that has
+        // otherwise settled — that would silently discard the approval
+        // decision. Matches the guards on the `tool-input-*` /
+        // `tool-output-denied` handlers.
+        if (
+          p.state === "approval-responded" ||
+          p.state === "output-available" ||
+          p.state === "output-error" ||
+          p.state === "output-denied"
+        ) {
+          return true;
+        }
         p.state = "approval-requested";
         p.approval = {
           id: chunk.approvalId,
@@ -376,6 +390,21 @@ export function applyChunkToParts(
       const toolPart = findToolPartByCallId(parts, chunk.toolCallId);
       if (toolPart) {
         const p = toolPart as Record<string, unknown>;
+        // First-write-wins: a tool that's already terminal must not be
+        // regressed by a later/replayed chunk. Also preserve an
+        // `approval-responded` (user-approved) part — a continuation that
+        // re-validates the transcript can emit `tool-output-denied` for an
+        // approval the SDK deems unneeded (e.g. a tool without
+        // `needsApproval`); that must not silently flip a granted approval
+        // into a denial.
+        if (
+          p.state === "output-available" ||
+          p.state === "output-error" ||
+          p.state === "output-denied" ||
+          p.state === "approval-responded"
+        ) {
+          return true;
+        }
         p.state = "output-denied";
       }
       return true;
@@ -473,11 +502,41 @@ export function applyChunkToParts(
  * - `tool-input-available` for a `toolCallId` whose existing part is no
  *   longer `input-streaming` (i.e. has already advanced to `input-available`
  *   or any terminal state).
+ * - `tool-output-denied` for a `toolCallId` whose existing part is already
+ *   settled (`output-available` / `output-error` / `output-denied`) or
+ *   user-approved (`approval-responded`). A continuation that re-validates
+ *   the transcript can re-emit a denial for an approval the SDK now deems
+ *   unneeded; `applyChunkToParts` already drops it server-side, and this stops
+ *   it reaching the client (where the in-place `updateToolPart` would flip the
+ *   part to `output-denied`) and the replay buffer. Mirrors the
+ *   first-write-wins guard in `applyChunkToParts`.
+ * - `tool-approval-request` for a `toolCallId` whose existing part is already
+ *   `approval-responded` or settled. A continuation replaying a prior tool
+ *   round-trip can re-emit the approval request; left unfiltered it would
+ *   revert an already-approved tool back to `approval-requested` on the client
+ *   (re-showing Approve/Reject) and replay that regression on reconnect. Same
+ *   pattern and rationale as `tool-output-denied`.
  */
 export function isReplayChunk(
   parts: MessagePart[],
   chunk: StreamChunkData
 ): boolean {
+  if (
+    chunk.type === "tool-output-denied" ||
+    chunk.type === "tool-approval-request"
+  ) {
+    if (!chunk.toolCallId) return false;
+    const existing = findToolPartByCallId(parts, chunk.toolCallId);
+    if (!existing) return false;
+    const state = (existing as Record<string, unknown>).state;
+    return (
+      state === "output-available" ||
+      state === "output-error" ||
+      state === "output-denied" ||
+      state === "approval-responded"
+    );
+  }
+
   if (
     chunk.type !== "tool-input-start" &&
     chunk.type !== "tool-input-delta" &&
