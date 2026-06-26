@@ -12,7 +12,7 @@
       "head_sampling_rate": 1
     }
   },
-  "ai": { "binding": "AI" },
+  "ai": { "binding": "AI", "remote": true },
   "vars": {
     // The AI Gateway id resume runs are issued under (must have unified billing
     // or BYOK configured for the model vendors below).

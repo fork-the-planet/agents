@@ -4,12 +4,8 @@ import { createBrowserTools } from "agents/browser/ai";
 
 // The browser tool runs on a durable codemode runtime that lives in a facet
 // of the agent — the facet class must be exported from the worker entry.
-export { CodemodeRuntime } from "agents/browser";
-import {
-  AIChatAgent,
-  type OnChatMessageOptions,
-  type ChatResponseResult
-} from "@cloudflare/ai-chat";
+export { CodemodeRuntime } from "@cloudflare/codemode";
+import { AIChatAgent, type OnChatMessageOptions } from "@cloudflare/ai-chat";
 import {
   streamText,
   convertToModelMessages,
@@ -18,7 +14,6 @@ import {
   stepCountIs
 } from "ai";
 import { z } from "zod";
-import { nanoid } from "nanoid";
 
 /**
  * AI Chat Agent showcasing @cloudflare/ai-chat features:
@@ -43,8 +38,6 @@ export class ChatAgent extends AIChatAgent {
   // Defaults to `false` on `AIChatAgent`; `@cloudflare/think` enables it by
   // default. Bounded by `maxAttempts` (default 6).
   chatRecovery = true;
-
-  private _proactiveScheduled = false;
 
   // Wait for MCP connections to restore after hibernation before processing messages
   waitForMcpConnections = true;
@@ -183,44 +176,6 @@ export class ChatAgent extends AIChatAgent {
     });
 
     return result.toUIMessageStreamResponse();
-  }
-
-  protected async onChatResponse(result: ChatResponseResult) {
-    if (result.status === "completed") {
-      this.broadcast(JSON.stringify({ type: "streaming_done" }));
-    }
-
-    // After the very first user message, schedule a proactive follow-up.
-    // This demonstrates server-driven messaging: the agent sends a
-    // message on its own after a delay, and connected clients see
-    // the response stream in real time via isStreaming.
-    if (
-      !result.continuation &&
-      !this._proactiveScheduled &&
-      this.messages.filter((m) => m.role === "user").length === 1
-    ) {
-      this._proactiveScheduled = true;
-      await this.schedule(5, "sendProactiveMessage");
-    }
-  }
-
-  async sendProactiveMessage() {
-    const ready = await this.waitUntilStable({ timeout: 10_000 });
-    if (!ready) return;
-
-    await this.saveMessages((messages) => [
-      ...messages,
-      {
-        id: nanoid(),
-        role: "user" as const,
-        parts: [
-          {
-            type: "text" as const,
-            text: "Give me a one-sentence fun fact about the last topic we discussed."
-          }
-        ]
-      }
-    ]);
   }
 }
 
