@@ -87,7 +87,28 @@ function killProcess(child: ChildProcess): Promise<void> {
       resolve();
       return;
     }
-    child.on("exit", () => resolve());
+
+    // Detach the stdio listeners and stop referencing the pipes BEFORE killing.
+    // We SIGKILL the whole `wrangler dev` process group (workerd included) while
+    // its stdout/stderr are piped into this forked vitest worker; a kill-time
+    // EPIPE or late write would otherwise race the worker's own shutdown and
+    // make tinypool report "Worker exited unexpectedly" (failing the run even
+    // though every test passed).
+    child.stdout?.removeAllListeners("data");
+    child.stderr?.removeAllListeners("data");
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+    child.removeAllListeners();
+    child.unref();
+
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+
+    child.once("exit", done);
     try {
       process.kill(-child.pid, "SIGKILL");
     } catch {
@@ -97,7 +118,7 @@ function killProcess(child: ChildProcess): Promise<void> {
         // already dead
       }
     }
-    setTimeout(resolve, 3000);
+    setTimeout(done, 3000).unref();
   });
 }
 
