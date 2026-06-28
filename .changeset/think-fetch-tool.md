@@ -1,5 +1,5 @@
 ---
-"@cloudflare/think": minor
+"@cloudflare/think": patch
 ---
 
 Add an opt-in, read-only HTTP fetch capability for Think agents via the new `@cloudflare/think/tools/fetch` export and a `fetchTools` property on `Think`.

@@ -1,5 +1,5 @@
 ---
-"@cloudflare/think": minor
+"@cloudflare/think": patch
 ---
 
 Improve Think's tool-call lifecycle hooks (follow-ups from #1343):
