@@ -3635,13 +3635,81 @@ export class AIChatAgent<
     runId: string,
     options?: { afterSequence?: number; signal?: AbortSignal }
   ): Promise<ReadableStream<AgentToolStoredChunk>> {
+    // Hoisted out of `start` so the `cancel` callback (a sibling of `start` on
+    // the underlying source) can reach them — an in-scope-only `closed`/`forward`
+    // is exactly why a cancelled consumer used to leave a zombie forwarder.
+    let closed = false;
+    let forward: ((chunk: AgentToolStoredChunk) => void) | undefined;
+    const detach = () => {
+      // Remove our forwarder and drop the now-empty set so the broadcast
+      // idle-guard (`_agentToolForwarders.size`) goes cold again. Otherwise a
+      // run that was already terminal at attach (its `_closeAgentToolTailers`
+      // already ran and won't run again) leaves an empty set keyed by runId, and
+      // every subsequent broadcast on this DO keeps paying the
+      // `interceptAgentToolBroadcast` cost forever.
+      if (forward) {
+        const set = this._agentToolForwarders.get(runId);
+        set?.delete(forward);
+        if (set && set.size === 0) this._agentToolForwarders.delete(runId);
+        forward = undefined;
+      }
+    };
     const stream = new ReadableStream<Uint8Array>({
       start: async (controller) => {
-        let closed = false;
+        // Highest sequence already enqueued into this view. Stored chunk_index
+        // and the live forwarder sequence share one monotonic numbering (see
+        // `_getAgentToolStoredChunks`), so a single high-water mark dedupes the
+        // stored-replay → live-forwarding handoff: a chunk that lands in both
+        // the drained backlog AND the live buffer (because it was stored and
+        // broadcast during the drain) is emitted exactly once, in order.
+        let lastEmitted = options?.afterSequence ?? -1;
+        const emit = (chunk: AgentToolStoredChunk) => {
+          if (closed) return;
+          // Drop out-of-order / duplicate sequences. Guarantees in-order,
+          // exactly-once delivery so the parent can rebuild tool-call state
+          // (input-available → output-available) without gaps.
+          if (chunk.sequence <= lastEmitted) return;
+          lastEmitted = chunk.sequence;
+          try {
+            controller.enqueue(
+              agentToolChunkEncoder.encode(`${JSON.stringify(chunk)}\n`)
+            );
+          } catch {
+            // The consumer detached (e.g. a parent's bounded re-attach budget
+            // expired) between the read view closing and our handling here.
+            // Just mark dead and detach — do NOT call `controller.close()` on an
+            // already-cancelled stream, which throws and would propagate out of
+            // `interceptAgentToolBroadcast`'s forward loop, starving the run's
+            // sibling tailers of this chunk. The child run is unaffected.
+            closed = true;
+            detach();
+          }
+        };
+
+        // While draining the stored backlog, live chunks are parked here rather
+        // than emitted directly, so they keep arriving (the forwarder is
+        // registered FIRST, below) but never race ahead of / interleave with
+        // the ordered backlog.
+        let draining = true;
+        const pending: AgentToolStoredChunk[] = [];
+        forward = (chunk: AgentToolStoredChunk) => {
+          if (closed) return;
+          if (draining) {
+            pending.push(chunk);
+            return;
+          }
+          emit(chunk);
+        };
+
         const close = () => {
           if (closed) return;
           closed = true;
-          controller.close();
+          detach();
+          try {
+            controller.close();
+          } catch {
+            // Already closed (e.g. the consumer cancelled the reader first).
+          }
         };
         const onAbort = () => close();
 
@@ -3652,36 +3720,19 @@ export class AIChatAgent<
           }
           options?.signal?.addEventListener("abort", onAbort, { once: true });
 
-          for (const chunk of await this.getAgentToolChunks(runId, options)) {
-            if (closed) return;
-            controller.enqueue(
-              agentToolChunkEncoder.encode(`${JSON.stringify(chunk)}\n`)
-            );
-          }
-
-          const inspection = await this.inspectAgentToolRun(runId);
-          if (!inspection || inspection.status !== "running") {
-            close();
-            return;
-          }
-
+          // Register the live forwarder BEFORE draining the stored backlog.
+          // Previously the forwarder was attached only AFTER `getAgentToolChunks`
+          // + `inspectAgentToolRun` resolved; any chunk the child stored AND
+          // broadcast during those `await` boundaries advanced the live sequence
+          // with no forwarder attached, so it was neither in the drained
+          // snapshot nor live-forwarded — silently dropped from the parent's
+          // forward stream. A network-paced proxied remote stream (a sub-agent
+          // returning a remote `toUIMessageStreamResponse()` from
+          // `onChatMessage`) hits this window constantly, leaving tool parts
+          // stuck at `input-available` on the client (#1589).
           const forwarders =
             this._agentToolForwarders.get(runId) ??
             new Set<(chunk: AgentToolStoredChunk) => void>();
-          const forward = (chunk: AgentToolStoredChunk) => {
-            if (closed) return;
-            try {
-              controller.enqueue(
-                agentToolChunkEncoder.encode(`${JSON.stringify(chunk)}\n`)
-              );
-            } catch {
-              // The consumer detached (e.g. a parent's bounded re-attach budget
-              // expired) between the read view closing and our close() running.
-              // Drop the chunk instead of surfacing a stream rejection; the
-              // child run is unaffected.
-              close();
-            }
-          };
           forwarders.add(forward);
           this._agentToolForwarders.set(runId, forwarders);
 
@@ -3689,11 +3740,67 @@ export class AIChatAgent<
             this._agentToolClosers.get(runId) ?? new Set<() => void>();
           closers.add(close);
           this._agentToolClosers.set(runId, closers);
+
+          for (const chunk of await this.getAgentToolChunks(runId, options)) {
+            if (closed) return;
+            emit(chunk);
+          }
+
+          // Flush anything that arrived live during the drain, then switch the
+          // forwarder to direct emit. No `await` between here and the loop above
+          // means no live chunk can slip past this handoff.
+          draining = false;
+          for (const chunk of pending) emit(chunk);
+          pending.length = 0;
+
+          const inspection = await this.inspectAgentToolRun(runId);
+          if (!inspection || inspection.status !== "running") {
+            close();
+            return;
+          }
+
+          // Run is still live: realign the live sequence to continue right
+          // after the highest emitted chunk (the stored high-water plus
+          // anything captured during the drain). On a normal warm attach the
+          // in-memory counter is already in lockstep with the stored
+          // chunk_index, so this is a no-op. But after the CHILD's Durable
+          // Object restarts/wakes from hibernation, `_agentToolLiveSequences`
+          // is cold (empty) while the stored backlog sits at N, and a
+          // chat-recovery resume re-attaches via `tailAgentToolRun` WITHOUT
+          // re-running `startAgentToolRun` (which is what seeds the counter).
+          // Without this realign the broadcast snoop would hand the recovered
+          // turn's new chunks sequences from 0 — all <= N — and `emit`'s
+          // high-water dedupe would silently drop every one, leaving the parent
+          // stuck with no post-restart chunks. Gating on the still-running check
+          // also avoids re-heating the broadcast idle-guard for a terminal run.
+          // Mirrors @cloudflare/think's tail.
+          if (lastEmitted > (options?.afterSequence ?? -1)) {
+            this._agentToolLiveSequences.set(runId, lastEmitted + 1);
+          }
         } catch (error) {
-          controller.error(error);
+          // Detach the up-front-registered forwarder before surfacing the
+          // failure so it doesn't linger on this run, then guard
+          // `controller.error` — the stream may already be torn down (e.g. the
+          // consumer cancelled during the drain await), in which case
+          // `controller.error` throws.
+          closed = true;
+          detach();
+          try {
+            controller.error(error);
+          } catch {
+            // Stream already torn down.
+          }
         }
       },
-      cancel: () => {}
+      cancel: () => {
+        // A consumer detaching from the tail (e.g. a parent's bounded re-attach
+        // budget expiring via reader.cancel()) is read-only — it must NOT cancel
+        // the child run. Mark dead and detach the forwarder so no later broadcast
+        // reaches this torn-down controller (a lingering forwarder would throw on
+        // the next enqueue). Mirrors @cloudflare/think's read-only tail.
+        closed = true;
+        detach();
+      }
     });
     return stream as unknown as ReadableStream<AgentToolStoredChunk>;
   }
