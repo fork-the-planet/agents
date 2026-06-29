@@ -3,5 +3,5 @@
   "compilerOptions": {
     "types": ["@cloudflare/workers-types", "node"]
   },
-  "include": ["src", "scripts", "env.d.ts"]
+  "include": ["src", "scripts"]
 }

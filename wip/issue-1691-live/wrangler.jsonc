@@ -28,8 +28,5 @@
   ],
   "vars": {
     "LLM_PROVIDER": "workers-ai"
-  },
-  "secrets": {
-    "required": ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
   }
 }

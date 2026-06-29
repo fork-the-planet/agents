@@ -28,6 +28,10 @@ import { McpAgent } from "agents/mcp";
 import { getAgentByName } from "agents";
 import { z } from "zod";
 
+type Env = {
+  MCP_TEARDOWN: DurableObjectNamespace<McpTeardownAgent>;
+};
+
 type State = { counter: number };
 
 // Mirrors the SDK-internal marker key so the probe can observe an in-flight
