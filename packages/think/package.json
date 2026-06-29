@@ -33,7 +33,7 @@
     "create-think": "workspace:*",
     "just-bash": "^3.0.2",
     "smol-toml": "^1.7.0",
-    "workers-ai-provider": "^3.2.1",
+    "workers-ai-provider": "^3.3.0",
     "yargs": "^18.0.0"
   },
   "devDependencies": {
@@ -55,7 +55,7 @@
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "streamdown": "^2.5.0",
-    "tailwindcss": "^4.3.1",
+    "tailwindcss": "^4.3.2",
     "vite": "^8.1.0",
     "zod": "^4.4.3"
   },

@@ -351,7 +351,7 @@ export const THIRD_PARTY_DEPENDENCIES: Record<string, string> = {
 
 export const THIRD_PARTY_DEV_DEPENDENCIES: Record<string, string> = {
   "@cloudflare/vite-plugin": "^1.42.3",
-  "@cloudflare/workers-types": "^4.20260625.1",
+  "@cloudflare/workers-types": "^4.20260629.1",
   oxfmt: "^0.56.0",
   oxlint: "^1.71.0",
   typescript: "^6.0.3",

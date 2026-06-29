@@ -35,22 +35,22 @@ importers:
         version: 2.6.0(@date-fns/tz@1.5.0)(@phosphor-icons/react@2.1.10(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@types/react@19.2.17)(date-fns@4.4.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(zod@4.4.3)
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/vitest-pool-workers':
         specifier: ^0.16.20
-        version: 0.16.20(@cloudflare/workers-types@4.20260625.1)(@vitest/runner@4.1.9)(@vitest/snapshot@4.1.9)(vitest@4.1.9)
+        version: 0.16.20(@cloudflare/workers-types@4.20260629.1)(@vitest/runner@4.1.9)(@vitest/snapshot@4.1.9)(vitest@4.1.9)
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
       '@openai/agents':
         specifier: ^0.12.0
-        version: 0.12.0(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
+        version: 0.12.0(@aws-sdk/credential-provider-node@3.972.57)(@cfworker/json-schema@4.1.1)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3)
       '@openai/agents-extensions':
         specifier: ^0.12.0
-        version: 0.12.0(@ai-sdk/provider@3.0.10)(@cfworker/json-schema@4.1.1)(@openai/agents@0.12.0(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3))(ai@6.0.208(zod@4.4.3))(ws@8.21.0)(zod@4.4.3)
+        version: 0.12.0(@ai-sdk/provider@3.0.10)(@aws-sdk/credential-provider-node@3.972.57)(@cfworker/json-schema@4.1.1)(@openai/agents@0.12.0(@aws-sdk/credential-provider-node@3.972.57)(@cfworker/json-schema@4.1.1)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3))(@smithy/signature-v4@5.5.1)(ai@6.0.208(zod@4.4.3))(ws@8.21.0)(zod@4.4.3)
       '@phosphor-icons/react':
         specifier: ^2.1.10
         version: 2.1.10(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -64,8 +64,8 @@ importers:
         specifier: ^19.2.3
         version: 19.2.3(@types/react@19.2.17)
       '@typescript/native-preview':
-        specifier: ^7.0.0-dev.20260624.1
-        version: 7.0.0-dev.20260624.1
+        specifier: ^7.0.0-dev.20260629.1
+        version: 7.0.0-dev.20260629.1
       '@vitejs/plugin-react':
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -110,7 +110,7 @@ importers:
         version: 1.71.0
       partyserver:
         specifier: ^0.5.8
-        version: 0.5.8(@cloudflare/workers-types@4.20260625.1)
+        version: 0.5.8(@cloudflare/workers-types@4.20260629.1)
       partysocket:
         specifier: 1.3.0
         version: 1.3.0(react@19.2.7)
@@ -131,7 +131,7 @@ importers:
         version: 1.12.0
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.3(@typescript/native-preview@7.0.0-dev.20260624.1)(tsx@4.22.4)(typescript@6.0.3)
+        version: 0.22.3(@typescript/native-preview@7.0.0-dev.20260629.1)(tsx@4.22.4)(typescript@6.0.3)
       tsx:
         specifier: ^4.22.4
         version: 4.22.4
@@ -148,11 +148,11 @@ importers:
         specifier: ^2.2.0
         version: 2.2.0(patch_hash=1c11a562f8f4bcb95c9e73d63f769ffaf898ea427aecfd147d6d58acd07f9316)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vitest@4.1.9)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -181,15 +181,15 @@ importers:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -206,8 +206,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -216,7 +216,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/agent-skills:
     dependencies:
@@ -244,10 +244,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -264,8 +264,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -274,7 +274,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/agents-as-tools:
     dependencies:
@@ -311,10 +311,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@playwright/test':
         specifier: ^1.61.1
         version: 1.61.1
@@ -334,8 +334,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -344,7 +344,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/ai-chat:
     dependencies:
@@ -382,18 +382,18 @@ importers:
         specifier: ^2.5.0
         version: 2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
       zod:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -410,8 +410,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -420,7 +420,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/assistant:
     dependencies:
@@ -466,10 +466,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -486,8 +486,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -496,7 +496,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/auth-agent:
     dependencies:
@@ -522,15 +522,15 @@ importers:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -547,8 +547,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -557,7 +557,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/browser-live-view:
     dependencies:
@@ -591,10 +591,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -611,8 +611,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -621,7 +621,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/browser-quick-actions:
     dependencies:
@@ -644,15 +644,15 @@ importers:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -669,8 +669,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -679,7 +679,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/chat-sdk-messenger:
     dependencies:
@@ -713,10 +713,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -733,8 +733,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -743,7 +743,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/codemode:
     dependencies:
@@ -778,18 +778,18 @@ importers:
         specifier: ^2.5.0
         version: 2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
       zod:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -806,8 +806,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -816,7 +816,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/codemode-browser:
     dependencies:
@@ -851,18 +851,18 @@ importers:
         specifier: ^2.5.0
         version: 2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
       zod:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -879,8 +879,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -889,7 +889,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/codemode-connectors:
     dependencies:
@@ -930,18 +930,18 @@ importers:
         specifier: ^2.5.0
         version: 2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
       zod:
         specifier: '*'
         version: 4.4.3
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -958,8 +958,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -968,7 +968,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/codemode-mcp:
     dependencies:
@@ -986,8 +986,8 @@ importers:
         version: 4.4.3
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@types/node':
         specifier: ^26.0.1
         version: 26.0.1
@@ -996,7 +996,7 @@ importers:
         version: 6.0.3
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/codemode-mcp-openapi:
     dependencies:
@@ -1008,8 +1008,8 @@ importers:
         version: link:../../packages/agents
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@types/node':
         specifier: ^26.0.1
         version: 26.0.1
@@ -1018,7 +1018,7 @@ importers:
         version: 6.0.3
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/context-overflow-recovery:
     dependencies:
@@ -1046,10 +1046,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -1066,8 +1066,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -1076,7 +1076,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/cross-domain:
     dependencies:
@@ -1091,8 +1091,8 @@ importers:
         version: 19.2.7(react@19.2.7)
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@types/node':
         specifier: ^26.0.1
         version: 26.0.1
@@ -1116,7 +1116,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/deploy-churn:
     dependencies:
@@ -1145,15 +1145,15 @@ importers:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -1173,8 +1173,8 @@ importers:
         specifier: 1.3.0
         version: 1.3.0(react@19.2.7)
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       tsx:
         specifier: ^4.22.4
         version: 4.22.4
@@ -1186,7 +1186,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/dynamic-tools:
     dependencies:
@@ -1218,15 +1218,15 @@ importers:
         specifier: ^2.5.0
         version: 2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -1243,8 +1243,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -1253,7 +1253,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/dynamic-workers:
     dependencies:
@@ -1272,10 +1272,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -1292,8 +1292,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -1302,7 +1302,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/dynamic-workers-playground:
     dependencies:
@@ -1327,10 +1327,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -1347,8 +1347,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -1357,7 +1357,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/elevenlabs-starter:
     dependencies:
@@ -1392,18 +1392,18 @@ importers:
         specifier: ^2.5.0
         version: 2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
       zod:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -1420,8 +1420,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -1430,7 +1430,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/email-agent:
     dependencies:
@@ -1455,10 +1455,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -1475,8 +1475,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -1485,7 +1485,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/github-webhook:
     dependencies:
@@ -1501,10 +1501,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@types/node':
         specifier: ^26.0.1
         version: 26.0.1
@@ -1525,7 +1525,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/mcp:
     dependencies:
@@ -1553,10 +1553,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -1573,8 +1573,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -1583,7 +1583,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/mcp-client:
     dependencies:
@@ -1608,10 +1608,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -1628,8 +1628,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -1638,7 +1638,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/mcp-elicitation:
     dependencies:
@@ -1676,18 +1676,18 @@ importers:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
       zod:
         specifier: '*'
         version: 4.4.3
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -1704,8 +1704,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -1714,7 +1714,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/mcp-server:
     dependencies:
@@ -1748,10 +1748,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -1768,8 +1768,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -1778,7 +1778,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/mcp-worker-authenticated:
     dependencies:
@@ -1812,10 +1812,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -1832,8 +1832,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -1842,7 +1842,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/multi-ai-chat:
     dependencies:
@@ -1877,18 +1877,18 @@ importers:
         specifier: ^2.5.0
         version: 2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
       zod:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -1905,8 +1905,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -1915,7 +1915,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/playground:
     dependencies:
@@ -1947,8 +1947,8 @@ importers:
         specifier: ^6.0.202
         version: 6.0.208(zod@4.4.3)
       cronstrue:
-        specifier: ^3.21.0
-        version: 3.21.0
+        specifier: ^3.23.0
+        version: 3.23.0
       nanoid:
         specifier: ^5.1.16
         version: 5.1.16
@@ -1971,18 +1971,18 @@ importers:
         specifier: ^2.5.0
         version: 2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
       zod:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -1999,8 +1999,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -2009,7 +2009,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/push-notifications:
     dependencies:
@@ -2034,10 +2034,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -2057,8 +2057,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -2067,7 +2067,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/resumable-stream-chat:
     dependencies:
@@ -2093,15 +2093,15 @@ importers:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -2118,8 +2118,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -2128,7 +2128,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/sandbox-coding-agent:
     dependencies:
@@ -2139,8 +2139,8 @@ importers:
         specifier: ^2.6.0
         version: 2.6.0(@date-fns/tz@1.5.0)(@phosphor-icons/react@2.1.10(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(@types/react@19.2.17)(date-fns@4.4.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(zod@4.4.3)
       '@cloudflare/sandbox':
-        specifier: 0.12.1
-        version: 0.12.1(@openai/agents@0.12.0(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3))
+        specifier: 0.12.2
+        version: 0.12.2(@openai/agents@0.12.0(@aws-sdk/credential-provider-node@3.972.57)(@cfworker/json-schema@4.1.1)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3))
       '@cloudflare/think':
         specifier: '*'
         version: link:../../packages/think
@@ -2171,10 +2171,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -2191,14 +2191,14 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/structured-input:
     dependencies:
@@ -2230,18 +2230,18 @@ importers:
         specifier: ^2.5.0
         version: 2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
       zod:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -2258,8 +2258,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -2268,7 +2268,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/telnyx-voice-agent:
     dependencies:
@@ -2297,15 +2297,15 @@ importers:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -2329,7 +2329,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/think-chat-sdk:
     dependencies:
@@ -2360,10 +2360,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -2380,8 +2380,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -2390,7 +2390,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/think-react-router:
     dependencies:
@@ -2412,13 +2412,13 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@react-router/dev':
         specifier: ^8.0.1
-        version: 8.0.1(react-router@8.0.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(typescript@6.0.3)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 8.0.1(react-router@8.0.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(typescript@6.0.3)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@types/node':
         specifier: ^26.0.1
         version: 26.0.1
@@ -2439,7 +2439,7 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/browser-playwright@4.1.9)(jsdom@29.1.1(@noble/hashes@1.8.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/think-submissions:
     dependencies:
@@ -2467,10 +2467,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -2487,8 +2487,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -2497,7 +2497,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/think-tanstack-start:
     dependencies:
@@ -2522,10 +2522,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@types/node':
         specifier: ^26.0.1
         version: 26.0.1
@@ -2549,7 +2549,7 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/browser-playwright@4.1.9)(jsdom@29.1.1(@noble/hashes@1.8.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/think-workflows:
     dependencies:
@@ -2567,14 +2567,14 @@ importers:
         version: 4.4.3
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/tictactoe:
     dependencies:
@@ -2605,10 +2605,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -2625,8 +2625,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -2635,7 +2635,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/voice-agent:
     dependencies:
@@ -2661,18 +2661,18 @@ importers:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
       zod:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -2689,8 +2689,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -2699,7 +2699,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/voice-input:
     dependencies:
@@ -2724,10 +2724,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -2744,8 +2744,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -2754,7 +2754,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/webmcp:
     dependencies:
@@ -2778,8 +2778,8 @@ importers:
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
 
   examples/worker-bundler-playground:
     dependencies:
@@ -2817,18 +2817,18 @@ importers:
         specifier: ^2.5.0
         version: 2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
       zod:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -2845,8 +2845,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -2855,7 +2855,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/workflows:
     dependencies:
@@ -2874,10 +2874,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -2894,8 +2894,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -2904,7 +2904,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/workspace-chat:
     dependencies:
@@ -2942,18 +2942,18 @@ importers:
         specifier: ^2.5.0
         version: 2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
       zod:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -2970,8 +2970,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -2980,7 +2980,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/x402:
     dependencies:
@@ -2991,17 +2991,17 @@ importers:
         specifier: ^2.1.10
         version: 2.1.10(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@x402/core':
-        specifier: ^2.16.0
-        version: 2.16.0
+        specifier: ^2.17.0
+        version: 2.17.0
       '@x402/evm':
-        specifier: ^2.16.0
-        version: 2.16.0(typescript@6.0.3)
+        specifier: ^2.17.0
+        version: 2.17.0(typescript@6.0.3)
       '@x402/fetch':
-        specifier: ^2.16.0
-        version: 2.16.0
+        specifier: ^2.17.0
+        version: 2.17.0
       '@x402/hono':
-        specifier: ^2.16.0
-        version: 2.16.0(hono@4.12.27)(typescript@6.0.3)
+        specifier: ^2.17.0
+        version: 2.17.0(hono@4.12.27)(typescript@6.0.3)
       agents:
         specifier: '*'
         version: link:../../packages/agents
@@ -3023,10 +3023,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -3043,8 +3043,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -3053,7 +3053,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   examples/x402-mcp:
     dependencies:
@@ -3067,8 +3067,8 @@ importers:
         specifier: ^2.1.10
         version: 2.1.10(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@x402/evm':
-        specifier: ^2.16.0
-        version: 2.16.0(typescript@6.0.3)
+        specifier: ^2.17.0
+        version: 2.17.0(typescript@6.0.3)
       agents:
         specifier: '*'
         version: link:../../packages/agents
@@ -3090,10 +3090,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -3110,8 +3110,8 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -3120,7 +3120,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   experimental/chat-recovery-probe:
     dependencies:
@@ -3138,14 +3138,14 @@ importers:
         version: 6.0.208(zod@4.4.3)
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   experimental/forever-chat:
     dependencies:
@@ -3175,8 +3175,8 @@ importers:
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
 
   experimental/forever-fibers:
     dependencies:
@@ -3191,8 +3191,8 @@ importers:
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
 
   experimental/gadgets-chat:
     dependencies:
@@ -3216,8 +3216,8 @@ importers:
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
 
   experimental/gadgets-gatekeeper:
     dependencies:
@@ -3244,8 +3244,8 @@ importers:
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
 
   experimental/gadgets-sandbox:
     dependencies:
@@ -3272,8 +3272,8 @@ importers:
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
 
   experimental/gadgets-subagents:
     dependencies:
@@ -3300,8 +3300,8 @@ importers:
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
 
   experimental/gateway-resume:
     dependencies:
@@ -3340,8 +3340,8 @@ importers:
         version: 6.0.208(zod@4.4.3)
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -3350,7 +3350,7 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/browser-playwright@4.1.9)(jsdom@29.1.1(@noble/hashes@1.8.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   experimental/inference-buffer: {}
 
@@ -3367,14 +3367,14 @@ importers:
         version: 6.0.208(zod@4.4.3)
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   experimental/pi-recovery:
     dependencies:
@@ -3389,8 +3389,8 @@ importers:
         version: link:../../packages/agents
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -3399,7 +3399,7 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.0)(@types/node@26.0.1)(@vitest/browser-playwright@4.1.9)(jsdom@29.1.1(@noble/hashes@1.8.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   experimental/session-memory:
     dependencies:
@@ -3425,15 +3425,15 @@ importers:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
     devDependencies:
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
 
   experimental/session-multichat:
     dependencies:
@@ -3456,15 +3456,15 @@ importers:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
     devDependencies:
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
 
   experimental/session-planetscale:
     dependencies:
@@ -3493,8 +3493,8 @@ importers:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
     devDependencies:
       '@tailwindcss/vite':
         specifier: ^4
@@ -3503,8 +3503,8 @@ importers:
         specifier: ^8.20.0
         version: 8.20.0
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
 
   experimental/session-search:
     dependencies:
@@ -3530,15 +3530,15 @@ importers:
         specifier: ^19.2.7
         version: 19.2.7(react@19.2.7)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
     devDependencies:
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
 
   experimental/session-skills:
     dependencies:
@@ -3568,23 +3568,23 @@ importers:
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
 
   experimental/tanstack-recovery:
     dependencies:
       '@cloudflare/tanstack-ai':
-        specifier: ^0.1.10
-        version: 0.1.10(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@tanstack/ai-client@0.18.0(@opentelemetry/api@1.9.1))(@tanstack/ai@0.32.0(@opentelemetry/api@1.9.1))(ws@8.21.0)(zod@4.4.3)
+        specifier: ^0.2.0
+        version: 0.2.0(@aws-sdk/credential-provider-node@3.972.57)(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@smithy/signature-v4@5.5.1)(@tanstack/ai@0.38.0(@opentelemetry/api@1.9.1))(ws@8.21.0)(zod@4.4.3)
       '@tanstack/ai':
-        specifier: 0.32.0
-        version: 0.32.0(@opentelemetry/api@1.9.1)
+        specifier: 0.38.0
+        version: 0.38.0(@opentelemetry/api@1.9.1)
       '@tanstack/ai-client':
-        specifier: 0.18.0
-        version: 0.18.0(@opentelemetry/api@1.9.1)
+        specifier: 0.19.0
+        version: 0.19.0(@opentelemetry/api@1.9.1)
       '@tanstack/ai-react':
-        specifier: 0.15.9
-        version: 0.15.9(@opentelemetry/api@1.9.1)(@tanstack/ai@0.32.0(@opentelemetry/api@1.9.1))(@types/react@19.2.17)(react@19.2.7)
+        specifier: 0.16.0
+        version: 0.16.0(@opentelemetry/api@1.9.1)(@tanstack/ai@0.38.0(@opentelemetry/api@1.9.1))(@types/react@19.2.17)(react@19.2.7)
       agents:
         specifier: '*'
         version: link:../../packages/agents
@@ -3597,10 +3597,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@types/node':
         specifier: ^26.0.1
         version: 26.0.1
@@ -3624,7 +3624,7 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/browser-playwright@4.1.9)(jsdom@29.1.1(@noble/hashes@1.8.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   guides/anthropic-patterns:
     dependencies:
@@ -3654,7 +3654,7 @@ importers:
     dependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@vitejs/plugin-react':
         specifier: ^6.0.3
         version: 6.0.3(@rolldown/plugin-babel@0.2.3(@babel/core@7.29.7)(@babel/runtime@7.29.7)(rolldown@1.1.2)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -3729,7 +3729,7 @@ importers:
         version: 5.1.16
       partyserver:
         specifier: ^0.5.8
-        version: 0.5.8(@cloudflare/workers-types@4.20260625.1)
+        version: 0.5.8(@cloudflare/workers-types@4.20260629.1)
       partysocket:
         specifier: 1.3.0
         version: 1.3.0(react@19.2.7)
@@ -3750,8 +3750,8 @@ importers:
         specifier: 0.1.16
         version: 0.1.16(@cfworker/json-schema@4.1.1)
       '@tanstack/ai':
-        specifier: 0.32.0
-        version: 0.32.0(@opentelemetry/api@1.9.1)
+        specifier: 0.38.0
+        version: 0.38.0(@opentelemetry/api@1.9.1)
       '@types/react':
         specifier: ^19.2.17
         version: 19.2.17
@@ -3762,11 +3762,11 @@ importers:
         specifier: ^4.1.9
         version: 4.1.9(playwright@1.61.1)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@4.1.9)
       '@x402/core':
-        specifier: ^2.16.0
-        version: 2.16.0
+        specifier: ^2.17.0
+        version: 2.17.0
       '@x402/evm':
-        specifier: ^2.16.0
-        version: 2.16.0(typescript@6.0.3)
+        specifier: ^2.17.0
+        version: 2.17.0(typescript@6.0.3)
       ai:
         specifier: ^6.0.202
         version: 6.0.208(zod@4.4.3)
@@ -3836,8 +3836,8 @@ importers:
         specifier: ^1.61.1
         version: 1.61.1
       '@tanstack/ai':
-        specifier: 0.32.0
-        version: 0.32.0(@opentelemetry/api@1.9.1)
+        specifier: 0.38.0
+        version: 0.38.0(@opentelemetry/api@1.9.1)
       ai:
         specifier: ^6.0.202
         version: 6.0.208(zod@4.4.3)
@@ -3880,7 +3880,7 @@ importers:
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: ^0.16.20
-        version: 0.16.20(@cloudflare/workers-types@4.20260625.1)(@vitest/runner@4.1.9)(@vitest/snapshot@4.1.9)(vitest@4.1.9)
+        version: 0.16.20(@cloudflare/workers-types@4.20260629.1)(@vitest/runner@4.1.9)(@vitest/snapshot@4.1.9)(vitest@4.1.9)
       vitest:
         specifier: 4.1.9
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/browser-playwright@4.1.9)(jsdom@29.1.1(@noble/hashes@1.8.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -3915,8 +3915,8 @@ importers:
         specifier: ^1.7.0
         version: 1.7.0
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
       yargs:
         specifier: ^18.0.0
         version: 18.0.0
@@ -3976,8 +3976,8 @@ importers:
         specifier: ^2.5.0
         version: 2.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       vite:
         specifier: ^8.1.0
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
@@ -4003,8 +4003,8 @@ importers:
         specifier: ^1.6.4
         version: 1.6.4(typescript@6.0.3)
       es-module-lexer:
-        specifier: ^2.1.0
-        version: 2.1.0
+        specifier: ^2.2.0
+        version: 2.2.0
       esbuild-wasm:
         specifier: 0.28.1
         version: 0.28.1
@@ -4025,8 +4025,8 @@ importers:
         version: 6.0.3
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@types/semver':
         specifier: ^7.7.1
         version: 7.7.1
@@ -4035,13 +4035,13 @@ importers:
         version: 0.28.1
       tsdown:
         specifier: ^0.22.3
-        version: 0.22.3(@typescript/native-preview@7.0.0-dev.20260624.1)(tsx@4.22.4)(typescript@6.0.3)
+        version: 0.22.3(@typescript/native-preview@7.0.0-dev.20260629.1)(tsx@4.22.4)(typescript@6.0.3)
 
   site/agents:
     dependencies:
       '@astrojs/cloudflare':
-        specifier: ^14.0.0
-        version: 14.0.0(@types/node@26.0.1)(astro@7.0.2(@astrojs/markdown-remark@7.2.0)(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@26.0.1)(aws4fetch@1.0.20)(jiti@2.7.0)(rollup@4.62.2)(tsx@4.22.4)(yaml@2.9.0))(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))(yaml@2.9.0)
+        specifier: ^14.0.1
+        version: 14.0.1(@types/node@26.0.1)(astro@7.0.3(@astrojs/markdown-remark@7.2.0)(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@26.0.1)(aws4fetch@1.0.20)(jiti@2.7.0)(rollup@4.62.2)(tsx@4.22.4)(yaml@2.9.0))(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))(yaml@2.9.0)
       '@astrojs/react':
         specifier: ^6.0.0
         version: 6.0.0(@types/node@26.0.1)(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(esbuild@0.28.1)(jiti@2.7.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(tsx@4.22.4)(yaml@2.9.0)
@@ -4058,8 +4058,8 @@ importers:
         specifier: ^1.0.0
         version: 1.0.0(react@19.2.7)
       astro:
-        specifier: ^7.0.2
-        version: 7.0.2(@astrojs/markdown-remark@7.2.0)(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@26.0.1)(aws4fetch@1.0.20)(jiti@2.7.0)(rollup@4.62.2)(tsx@4.22.4)(yaml@2.9.0)
+        specifier: ^7.0.3
+        version: 7.0.3(@astrojs/markdown-remark@7.2.0)(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@26.0.1)(aws4fetch@1.0.20)(jiti@2.7.0)(rollup@4.62.2)(tsx@4.22.4)(yaml@2.9.0)
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
@@ -4085,8 +4085,8 @@ importers:
         specifier: ^4.3.0
         version: 4.3.0
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
     devDependencies:
       '@tailwindcss/postcss':
         specifier: ^4
@@ -4105,7 +4105,7 @@ importers:
         version: 19.2.3(@types/react@19.2.17)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
     optionalDependencies:
       lightningcss-darwin-arm64:
         specifier: 1.32.0
@@ -4149,10 +4149,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -4172,8 +4172,8 @@ importers:
         specifier: ^1.71.0
         version: 1.71.0
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -4182,7 +4182,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   think-starters/business-workflow:
     dependencies:
@@ -4222,10 +4222,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -4245,8 +4245,8 @@ importers:
         specifier: ^1.71.0
         version: 1.71.0
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -4255,7 +4255,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   think-starters/coding-agent:
     dependencies:
@@ -4292,10 +4292,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -4315,8 +4315,8 @@ importers:
         specifier: ^1.71.0
         version: 1.71.0
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -4325,7 +4325,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   think-starters/customer-support:
     dependencies:
@@ -4365,10 +4365,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -4388,8 +4388,8 @@ importers:
         specifier: ^1.71.0
         version: 1.71.0
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -4398,7 +4398,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   think-starters/personal-assistant:
     dependencies:
@@ -4435,10 +4435,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -4458,8 +4458,8 @@ importers:
         specifier: ^1.71.0
         version: 1.71.0
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -4468,7 +4468,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   think-starters/webhook-agent:
     dependencies:
@@ -4508,10 +4508,10 @@ importers:
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.42.3
-        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
+        version: 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.1(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -4531,8 +4531,8 @@ importers:
         specifier: ^1.71.0
         version: 1.71.0
       tailwindcss:
-        specifier: ^4.3.1
-        version: 4.3.1
+        specifier: ^4.3.2
+        version: 4.3.2
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
@@ -4541,7 +4541,7 @@ importers:
         version: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   voice-providers/deepgram:
     dependencies:
@@ -4583,8 +4583,8 @@ importers:
         version: 4.4.3
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@types/node':
         specifier: ^26.0.1
         version: 26.0.1
@@ -4596,19 +4596,19 @@ importers:
         version: 6.0.3
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   wip/issue-1677-minimal:
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
   wip/issue-1691-live:
     dependencies:
@@ -4631,12 +4631,12 @@ importers:
         specifier: ^6.0.202
         version: 6.0.208(zod@4.4.3)
       workers-ai-provider:
-        specifier: ^3.2.1
-        version: 3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
+        specifier: ^3.3.0
+        version: 3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3))
     devDependencies:
       '@cloudflare/workers-types':
-        specifier: ^4.20260625.1
-        version: 4.20260625.1
+        specifier: ^4.20260629.1
+        version: 4.20260629.1
       '@types/node':
         specifier: ^26.0.1
         version: 26.0.1
@@ -4648,7 +4648,7 @@ importers:
         version: 6.0.3
       wrangler:
         specifier: ^4.105.0
-        version: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+        version: 4.105.0(@cloudflare/workers-types@4.20260629.1)
 
 packages:
 
@@ -4724,8 +4724,8 @@ packages:
   '@antfu/install-pkg@1.1.0':
     resolution: {integrity: sha512-MGQsmw10ZyI+EJo45CdSER4zEb+p31LpDAFp2Z3gkSd1yqVZGi0Ebx++YTEMonJy4oChEMLsxZ64j8FH6sSqtQ==}
 
-  '@anthropic-ai/sdk@0.104.2':
-    resolution: {integrity: sha512-s1wEVDAtEwkS7Ajgep6PZKJLFqybRkmD3Byz+iVVsSpbDY0gjROXE9aOft6V3PMqynn3NTcycV5whga9tCzmKA==}
+  '@anthropic-ai/sdk@0.106.0':
+    resolution: {integrity: sha512-ufwVvYNDBj2dzOGupBCTaNzBLxqcTnGOzI4z8Wouxlt+mT3J3HuOmatgCy1VmwCHOUueqZ41ERhm0O99OUcbWA==}
     hasBin: true
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
@@ -4766,8 +4766,8 @@ packages:
   '@asamuzakjp/nwsapi@2.3.9':
     resolution: {integrity: sha512-n8GuYSrI9bF7FFZ/SjhwevlHc8xaVlb/7HmHelnc/PZXBD2ZR49NnN9sMMuDdEGPeeRQ5d0hqlSlEpgCX3Wl0Q==}
 
-  '@astrojs/cloudflare@14.0.0':
-    resolution: {integrity: sha512-S6ew/QLFx8FhDPIWj7A3+51Y6Bs/vSDKiTvS5x/u3cNFypnDvz+tXHftK452VaXryVsTK4LcupPFmnI4ZtvKNA==}
+  '@astrojs/cloudflare@14.0.1':
+    resolution: {integrity: sha512-lbRA1khk7sN+NrzWrfFPIPgORtdyExvIPtlPVTSrjyf6oGmh419VwdGk1giRhtI6kO7AEFLvDNItmxt9vkEZRQ==}
     peerDependencies:
       astro: ^7.0.0-alpha.2
       wrangler: ^4.83.0
@@ -5406,8 +5406,8 @@ packages:
     resolution: {integrity: sha512-jxQYkj8dSIzc0cD6cMMNdOc1UVjqSqu8BZdor5s8cGjW2I8BjODt/kWPVdY+u9zj3ms75Q5qaZgnxUad83+eAg==}
     engines: {node: '>=22.0.0'}
 
-  '@cloudflare/sandbox@0.12.1':
-    resolution: {integrity: sha512-P1ZmNDLYtuEY1ZUcAx0OgTol98VqS617LGd4nf1RTOjSV2yHLDAp59NI36/gg3/pxkHPgmAEyFIjH/ie8FoA7g==}
+  '@cloudflare/sandbox@0.12.2':
+    resolution: {integrity: sha512-B3hgDEJuNT7IomMVN/oFulRFiHcs0rDUKDRuA1T36dOgR7gGheEQs3YpNp07lbREy0w4Gv+xob61+JCqE8FyAQ==}
     peerDependencies:
       '@openai/agents': ^0.3.3
       '@opencode-ai/sdk': ^1.1.40
@@ -5420,10 +5420,10 @@ packages:
       '@xterm/xterm':
         optional: true
 
-  '@cloudflare/tanstack-ai@0.1.10':
-    resolution: {integrity: sha512-MwJti32DLofxLp+QkUNkGEuwjj5ssmmQAmTpGBZ+pS/hTrwhIxotqdDesgv7oS7EeCgzosO4EKToebiWFhv8IA==}
+  '@cloudflare/tanstack-ai@0.2.0':
+    resolution: {integrity: sha512-c3+KiJpg5abwxXyHigzw/297Ybt61dyLrcga0joJrVh8jz4Hl6GXtD8/uMxKrKob7G7peRLpUVgY00pYx7F2ag==}
     peerDependencies:
-      '@tanstack/ai': '>=0.8.0 <1.0.0'
+      '@tanstack/ai': '>=0.28.0 <1.0.0'
 
   '@cloudflare/unenv-preset@2.16.1':
     resolution: {integrity: sha512-ECxObrMfyTl5bhQf/lZCXwo5G6xX9IAUo+nDMKK4SZ8m4Jvvxp52vilxyySSWh2YTZz8+HQ07qGH/2rEom1vDw==}
@@ -5481,8 +5481,8 @@ packages:
   '@cloudflare/workers-oauth-provider@0.8.1':
     resolution: {integrity: sha512-zB4In0X1O5Vhc+Eb1s3ZP8wiqxLt2Hg1cqkLjZE2qQW1LNc4cOs1YEqYqtIKqG91yEBgpFIMBNYiafHk3OWj4Q==}
 
-  '@cloudflare/workers-types@4.20260625.1':
-    resolution: {integrity: sha512-asH0RhPHiNu/IUSssyiOJYAcGqysy0DJpO9fihC6KATaayD9CE1E9bgNQozTLUraxrCT2qkM4CBOIcV0M5NPJw==}
+  '@cloudflare/workers-types@4.20260629.1':
+    resolution: {integrity: sha512-5vq2ErIFVRSQ8Dcw5YOeEoBdZBudqBjHFKTWD3SBGiJR5hD1+/86aRUV/DTpEK9sXXCGOTGgpWBGlPSlW7djVg==}
 
   '@cspotcode/source-map-support@0.8.1':
     resolution: {integrity: sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw==}
@@ -5799,8 +5799,8 @@ packages:
       '@modelcontextprotocol/sdk':
         optional: true
 
-  '@google/genai@2.9.0':
-    resolution: {integrity: sha512-3DRdSJ0LaKFig3FNGeRDn9BQxtjZm2qr0hNH2d771LKcG0HvUYddlN0LPdSp8XU7Ekb04i9q3+tt64uYqavUdw==}
+  '@google/genai@2.10.0':
+    resolution: {integrity: sha512-e4cFxj3tiuMtsgOT4G9c1hXyGJhg7/Buj7VVeBacRY3fRtkRZZ59Q3nuVp2xbq8BGQXLXCDB253qMhklMOeUDg==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       '@modelcontextprotocol/sdk': ^1.25.2
@@ -6340,8 +6340,8 @@ packages:
   '@openrouter/sdk@0.12.35':
     resolution: {integrity: sha512-s4QVLLnG1AmfW3TjnnHUqGfsCkzwVK+kboGcZmKbde09m1DPqgzl4RUFt/HJ5v97MX8aEaN0UG3mKv2S+qj2Gw==}
 
-  '@openrouter/sdk@0.12.79':
-    resolution: {integrity: sha512-0ZpwtnuHh3/B1piW9kHCUIQy6PAsaK/vjFdZuHxmCdAenCyUNsLA2mFpmfHNWRNb+bOO3yBc4IALa264UyzmBA==}
+  '@openrouter/sdk@0.13.21':
+    resolution: {integrity: sha512-kxr2hS5vViUFreQidnqVJni/StEJBnps6xPhW7Bvbjul99gt6CpJHJDQsW8BZzShESQsplES1Re7XIFoj9t8mw==}
 
   '@opentelemetry/api@1.9.0':
     resolution: {integrity: sha512-3giAOQvZiH5F9bMlMiv8+GSPMeqg0dbaeo58/0SlA9sxSqZhnUtxzX9/2FzyhS9sWQf5S0GJE0AKBrFqjpeYcg==}
@@ -7213,55 +7213,56 @@ packages:
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7 || ^8
 
-  '@tanstack/ai-anthropic@0.15.5':
-    resolution: {integrity: sha512-I9FFZhPUFvadRtQxU/lAcKbrv3PRjesOcBceJeevzYK5N+kSi4ic7tYXDmy9TCi+kHe4Y8cnXdrMKJ44KIaO9w==}
+  '@tanstack/ai-anthropic@0.15.11':
+    resolution: {integrity: sha512-4H/5sSNYeR5ToIrc2TtNUHlDfYjgYqbTv8hY5LGfLgJq/cKvU+p/WT5u+MHBZlMnOXk44X23QryDOI78b94WqA==}
     peerDependencies:
-      '@tanstack/ai': ^0.32.0
+      '@tanstack/ai': ^0.38.0
       zod: ^4.0.0
 
-  '@tanstack/ai-client@0.18.0':
-    resolution: {integrity: sha512-OjGT4VXcpWg31BVeFkqT9AWaiPQxVqryblq5tLbo3yecA+l0WphuSaB8gCZAn9mgyh5Si8r5hBKTsMhYminbhg==}
+  '@tanstack/ai-client@0.19.0':
+    resolution: {integrity: sha512-TjbV1LgOfNKewdWtHGH0mhMYWyTenwGA5Pl3VZs2ZVePIANKjw85VKoRNSvkJgKBJMSiSUR5uLcSJkFCXXI93A==}
 
-  '@tanstack/ai-event-client@0.6.3':
-    resolution: {integrity: sha512-aQb+v9a4T+uDS3VuDGKOdhwPvr2iwjHVweroXHwbasmvClFqV6WJhoekv74VJrhJrlwz8wVMEPcwlKHxnSAzLQ==}
-    peerDependencies:
-      '@tanstack/ai': 0.32.0
+  '@tanstack/ai-event-client@0.6.8':
+    resolution: {integrity: sha512-h7/HLz9u2LF9ba6uKFMnSZkFlkzQONJ5u3Hi+4qGxpsHyvcGRtW6v186jaFLoklndhEwyC49ytkC4eafi7Qq8w==}
 
-  '@tanstack/ai-gemini@0.17.0':
-    resolution: {integrity: sha512-AgvA/47FUBbChqeIzIfw1lhmCvl95ePHXyBFR/zG8YBPqde32TsOaTYSsV6c8EPn8k1PU56SsZJK0AoN4qk2ng==}
+  '@tanstack/ai-gemini@0.18.3':
+    resolution: {integrity: sha512-GvquWWPJ6Euuk+coCjXY9zbXKNBAS35QXcU5L9mGLeKLgj2VIuSnpnkElyJVo530kk+5pZHyGZeu1ykTjNBpIw==}
     peerDependencies:
-      '@tanstack/ai': ^0.32.0
+      '@tanstack/ai': ^0.38.0
 
-  '@tanstack/ai-grok@0.12.2':
-    resolution: {integrity: sha512-cVUZQ9vru/WC0ci4qkRiPkRe/ys9VmgrWDJoL1Tl005YnnO2FKnJNliT0rdNHrNTkgCQU9tYizjrijuUgamtmA==}
+  '@tanstack/ai-grok@0.14.5':
+    resolution: {integrity: sha512-WwNt0fH9unF4HaOfU6R5A3l4/Z8J7H1u5QwiTrrf+bzjOp4QMP9KzQU8ARU1YcAjlFaPhOeG/5Dr+bTqu6YmSg==}
     peerDependencies:
-      '@tanstack/ai': ^0.32.0
+      '@tanstack/ai': ^0.38.0
       zod: ^4.0.0
 
-  '@tanstack/ai-openai@0.15.2':
-    resolution: {integrity: sha512-xPIpedIjSIbxu2y5fpQJt3/qPFDBS1TfNoHYy80ejpvVa3NnXOF8a7XCUfzk5o0O5Sm7t7Xu/og+oETLmitmjA==}
+  '@tanstack/ai-openai@0.15.9':
+    resolution: {integrity: sha512-oY7lREtyzjfnTxfLK5jS5Ij0QbU0bn6Iu9mnYO/yRcwghUwJqGaSaoHh4sMrtpbTIg8m+9GOzG7pbDXn5dZJ2w==}
     peerDependencies:
-      '@tanstack/ai': ^0.32.0
-      '@tanstack/ai-client': ^0.18.0
+      '@tanstack/ai': ^0.38.0
       zod: ^4.0.0
 
-  '@tanstack/ai-openrouter@0.14.0':
-    resolution: {integrity: sha512-zMIngP5ssjrz/P+1pDMM6SvskzzOiO7sltR56W9EMvwtshux+cdxeqrOMRSD2NiqOdc1p1dX7ceOW3AhFW+c+A==}
+  '@tanstack/ai-openrouter@0.15.4':
+    resolution: {integrity: sha512-FNyb+Rd39jABlgurw+LCk8gblFIGBuyE8pGyMniJmKFcEjwKM4Wz1hOpvO0aOwhEQmaLDPlZCfIwOYgFQqvq4Q==}
     peerDependencies:
-      '@tanstack/ai': ^0.32.0
+      '@tanstack/ai': ^0.38.0
 
-  '@tanstack/ai-react@0.15.9':
-    resolution: {integrity: sha512-an/EwmaFB4mmc3H0xpwBE/8C9o9hp0hv/rjxF9RX+VxLOfznJrNIhBF01bSnkoIFEZU5pBvKKcS/EFXiTjC+Sw==}
+  '@tanstack/ai-react@0.16.0':
+    resolution: {integrity: sha512-0ujDK3cYHnUZETsbPR6rC+ACXOtRfMJ1KTddpnFnsmK7dGEPevl0eGVTL48uVJIcRXUenacgE2ZfR69q/Z5lUA==}
     peerDependencies:
-      '@tanstack/ai': ^0.32.0
+      '@mcp-ui/client': ^7
+      '@tanstack/ai': ^0.38.0
       '@types/react': '>=18.0.0'
       react: '>=18.0.0'
+    peerDependenciesMeta:
+      '@mcp-ui/client':
+        optional: true
 
-  '@tanstack/ai-utils@0.2.2':
-    resolution: {integrity: sha512-QZNgbhoPhh5snlMf21SuF4QNTJme4aldvBx2ppMefqfMQHBQPFDJl6TxHDNW8voIzQe42rE5U9XfoWrS0K/xFQ==}
+  '@tanstack/ai-utils@0.3.1':
+    resolution: {integrity: sha512-fgbjd5DohL3k5rTWr/KInauLVYMiHVm0cnmTsNrzL3cr4wWhEld5vmFSrjiwUWACAuONjZa+uBXuS+ZSO8fwDQ==}
 
-  '@tanstack/ai@0.32.0':
-    resolution: {integrity: sha512-8Saiyws4irNkxPcyLOucquYaEFEGUVBCrBJmfr1W6z1oDVDYF+pwb31rOLjN0/xqbGCHzjOaXc4TLAZS3kPS4g==}
+  '@tanstack/ai@0.38.0':
+    resolution: {integrity: sha512-fAX8pmaLXRx8jB8v4CyYqCxCAagvHzvmU7l4J89XkKlzuun69F/pumcKFUOGxZyQswiz1+pzfmNwscv7K8AJmA==}
     engines: {node: '>=18'}
     peerDependencies:
       '@opentelemetry/api': '>=1.9.0'
@@ -7278,10 +7279,10 @@ packages:
     resolution: {integrity: sha512-79pf/RkhteYZTRgcR4F9kbk84P2N8rugQJswxfIqovlbRiT3yI7eBE+5QorIrZaOKktsgzRlXh1l/du/xpl4iA==}
     engines: {node: '>=20.19'}
 
-  '@tanstack/openai-base@0.8.7':
-    resolution: {integrity: sha512-x4iBvzDXPLtNsevteyD9KbJPBSy/IDCQ6O1E/bsNpAKUVljnCza9dcoIsooA/IfAjFofL9P6gd9PiEorrZ6TCw==}
+  '@tanstack/openai-base@0.9.5':
+    resolution: {integrity: sha512-JTi8OAHeB+f2qxTU9Q9e7h4heNmgCmqzmymeg2tA0e8UJgTNFf9J165xrWE4BBMYI00bxdsNC+YgSHq77QhmhA==}
     peerDependencies:
-      '@tanstack/ai': ^0.32.0
+      '@tanstack/ai': ^0.38.0
 
   '@tanstack/react-router@1.170.16':
     resolution: {integrity: sha512-w6eq1IJklujs1tESazaK/FxH0+H2l8vm/QPuu1cD3oRW/ubgKneQpd7b64ti/8gUyEimzimJQZDmJr6YHfP5+g==}
@@ -7636,50 +7637,50 @@ packages:
   '@types/yargs@17.0.35':
     resolution: {integrity: sha512-qUHkeCyQFxMXg79wQfTtfndEC+N9ZZg76HJftDJp+qH2tV7Gj4OJi7l+PiWwJ+pWtW8GwSmqsDj/oymhrTWXjg==}
 
-  '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260624.1':
-    resolution: {integrity: sha512-g8CqDkYCHTCYdhBHXs5cMraBurOS+KrcMFxE0SsaKZoI6Tnp+le1aWvxUBbzNKJYyThHJqb/1mLopzEJxJCuKA==}
+  '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260629.1':
+    resolution: {integrity: sha512-wXRExZJweYoTzE4atRR7T5HwKJYkl6/KHxON0eF0iy2fvgLXDlyq4AQqhmV8mMx10PQKc/4sNbfhD4kjWWvm8A==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [darwin]
 
-  '@typescript/native-preview-darwin-x64@7.0.0-dev.20260624.1':
-    resolution: {integrity: sha512-P00JVvSV90eioYDuINAKmOSA8yhFTWLq6RvS5lrCfUuDlcgr2kSOgZAfFHIksHBVz6ZXpAXpa0dHPmc5SJ3Ymw==}
+  '@typescript/native-preview-darwin-x64@7.0.0-dev.20260629.1':
+    resolution: {integrity: sha512-xkL/tETzUuDxfRkk2rD0/CjjjGLyOLHeE103T52rpgj0VNSXMnn7tTiw+TSdxnS61b8ImOrWgQJujhPFTp0jng==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [darwin]
 
-  '@typescript/native-preview-linux-arm64@7.0.0-dev.20260624.1':
-    resolution: {integrity: sha512-cppM2yTZ/Gd1hOXy8NEJcUBxJ0O0zl9CU3OU1ZWZ/OHWWX/ukEzCCr94SUwJhjIWOylBCpIYkrvYoTwxNa94XQ==}
+  '@typescript/native-preview-linux-arm64@7.0.0-dev.20260629.1':
+    resolution: {integrity: sha512-y4ey82krq4iLNHML4G1dUObBWY6gNAjVqaUHFDv7+LBu5bfAJy8VClBaLtAJce3siQQeB0/4SkN4XsAa0oZktQ==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [linux]
 
-  '@typescript/native-preview-linux-arm@7.0.0-dev.20260624.1':
-    resolution: {integrity: sha512-eWHELvfQMkVRjafMd+3ATgM9p9yAergJaM4AOY8AekCNWnHFwUrp/ohh+ryyMUIqque5jjb/kuTiOiGj728I2Q==}
+  '@typescript/native-preview-linux-arm@7.0.0-dev.20260629.1':
+    resolution: {integrity: sha512-QlTxO+O6yELc0NYZZYIbncZhkhw+K/vBoVg+mKipbEIK5b1E6cwW7ivWIrDp1FfssQ0Wu7zxincPappoci7KNw==}
     engines: {node: '>=16.20.0'}
     cpu: [arm]
     os: [linux]
 
-  '@typescript/native-preview-linux-x64@7.0.0-dev.20260624.1':
-    resolution: {integrity: sha512-FaB8rS+rKYz4nDrEsHsF3b4cn7eCKCYroMJReA375OuQ6PHcmCNQ6QlVetA0dfFBxTTgejmoKyfw9xgAA5P4Yw==}
+  '@typescript/native-preview-linux-x64@7.0.0-dev.20260629.1':
+    resolution: {integrity: sha512-ckb4HyugC5beDpOMPOVpEx1H3l2Z2RgsGPxFOLGMU6LLIHQwlCaSdRjSfH8Hq8yffPgKuotTQLdA89cP1IC8xQ==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [linux]
 
-  '@typescript/native-preview-win32-arm64@7.0.0-dev.20260624.1':
-    resolution: {integrity: sha512-BgkqbCmSHDb5UxqWaFlFFJ/DHNT3lEUO4W8627ap6+QthJZuXk2imiHAX3PgYXC6en9fLLyR6jjcseAa4CCshg==}
+  '@typescript/native-preview-win32-arm64@7.0.0-dev.20260629.1':
+    resolution: {integrity: sha512-Ktgepu9p0blqrbiryzYrw11ddnbESXPdeGKURDG/wXESoHQETsMNxKWhqAo587ItNnWjKOBFxoEM22eP9OzKnw==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [win32]
 
-  '@typescript/native-preview-win32-x64@7.0.0-dev.20260624.1':
-    resolution: {integrity: sha512-WaZ+ue63NgB2j/lqjirfevh/TqcsCxSqnKhGGiRnlxHyYIBcoq+x7KngyEnyGIaywJE1PcFeXA+2EMSIPlSEiQ==}
+  '@typescript/native-preview-win32-x64@7.0.0-dev.20260629.1':
+    resolution: {integrity: sha512-b2wmeIpFJs/peej3NG26320ya+iYQz21JzFYDrnvtsEeR/g66rB9uvp4Owo4J1AG/BcmRWC/nuwrBy3Jdb+UDA==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [win32]
 
-  '@typescript/native-preview@7.0.0-dev.20260624.1':
-    resolution: {integrity: sha512-ogwfNo1xuAutOF8RbTCo3Ut0q/65u2ucOeHizi6O14q+3vnelNS+u8qVC2QWXubMcwtuN5E9cbfPslvGC4kdwA==}
+  '@typescript/native-preview@7.0.0-dev.20260629.1':
+    resolution: {integrity: sha512-KImWFkxGUa/V78bUEAgzeJQT+6wKQXDDYHHrOavof8wnbMCpj86KuPNyBIPQMtoHiz2If8aNTums2m50oE3oqw==}
     engines: {node: '>=16.20.0'}
     hasBin: true
 
@@ -7766,22 +7767,22 @@ packages:
   '@workflow/serde@4.1.0-beta.2':
     resolution: {integrity: sha512-8kkeoQKLDaKXefjV5dbhBj2aErfKp1Mc4pb6tj8144cF+Em5SPbyMbyLCHp+BVrFfFVCBluCtMx+jjvaFVZGww==}
 
-  '@x402/core@2.16.0':
-    resolution: {integrity: sha512-7MjwOEiE6ICAYtOsK9vQl66Ho4jERDuuoRg/No2Nc2GQ7y/M/yu4DJ65LzeBycQE+Qrg2RqQG7KR51tyT+hzjQ==}
+  '@x402/core@2.17.0':
+    resolution: {integrity: sha512-BBooe9Kewl5KLaKadElFwhZzZ+n/X/m2djzGtc7OY51D8fk2vHTVvDZtBFEJYdJxtQoUZMKX73hew0ss81FENQ==}
 
-  '@x402/evm@2.16.0':
-    resolution: {integrity: sha512-DGcwATWosIb3hmO/CfWASrn+xbxp7KQyzmMPcIW23XuDjo9YPVRElZWtHBur3euakdM021Hl8SPF1zR0G+W4hw==}
+  '@x402/evm@2.17.0':
+    resolution: {integrity: sha512-MjeouRdVJ1Y20Ikk03RHlnyOuo2FRkh0Nnrxt8aku2qt5fr5M7U8pUGn5iR6aFfRK3xlh48bp0Kypv1zjKuegw==}
 
-  '@x402/extensions@2.16.0':
-    resolution: {integrity: sha512-LHh5QrvB1QwiPr2zFqzpJonmMGxqJq1nDHifihyqNx1lJvU3DQgYGxPuHXE2l6nxGG0chF0alA/BsidDHFie/A==}
+  '@x402/extensions@2.17.0':
+    resolution: {integrity: sha512-oYQPLJkRWiSutEVAsyNxwKh4EyviG//s8Ms7Jwkx4J8csm1gd7TfCQTsLwDmieYA5B2Qp8ajebdTkL+bT9/sQA==}
 
-  '@x402/fetch@2.16.0':
-    resolution: {integrity: sha512-skW0XsWzi4NIfqCrY6KxhO3UEJ8qh4nBIKIgwWFCXFHNqRKYWZ7qcCI/DHy7cy3jdYs1MV4PoXX24rP3Umca1Q==}
+  '@x402/fetch@2.17.0':
+    resolution: {integrity: sha512-iy6ar1JTgs4gzdlc2q2Z7nuL5keBkQhoD4v5niVlTwLoivVvHnAA0p/wK5WTWRrJ1b+el8pthkjFS0Jc3nMIIg==}
 
-  '@x402/hono@2.16.0':
-    resolution: {integrity: sha512-CStjpNSifgKzrAYrJJSrxEe3z+/BXruONKxVbklYYEb+ehaaccLdHU4zc5szMH/dbypHcVzoL7YgV79y8WJTzA==}
+  '@x402/hono@2.17.0':
+    resolution: {integrity: sha512-xWh7eTGTDRAX1DX4e/BaaCKErveFnx7HOE2GA3RQu5AQFgTuO+bQr9TRG9zyjqmt32ICrMKbkQ69YC5puw8djg==}
     peerDependencies:
-      '@x402/paywall': ^2.16.0
+      '@x402/paywall': ^2.17.0
       hono: ^4.0.0
     peerDependenciesMeta:
       '@x402/paywall':
@@ -7933,8 +7934,8 @@ packages:
     resolution: {integrity: sha512-Z7tMw1ytTXt5jqMcOP+OQteU1VuNK9Y02uuJtKQ1Sv69jXQKKg5cibLwGJow8yzZP+eAc18EmLGPal0bp36rvQ==}
     engines: {node: '>=8'}
 
-  astro@7.0.2:
-    resolution: {integrity: sha512-Rj31HS85pVSfiQTxKTwH6vTmF8y57iRfkgb1uiCTtdLIh3jlUKPAPXtEmHXRKp/PdTS00D4EXYlWXypY+AVVCA==}
+  astro@7.0.3:
+    resolution: {integrity: sha512-CK+G+Tl2DMV1EXCwVG45vyurxf2IfRTklMxDhRKn+tst9Yl8rWXpudL62Fa6zin5Bt968FBvuyASj1aJShROZg==}
     engines: {node: '>=22.12.0', npm: '>=9.6.5', pnpm: '>=7.1.0'}
     hasBin: true
     peerDependencies:
@@ -8303,8 +8304,8 @@ packages:
     resolution: {integrity: sha512-BoZaseYGXOo5j5HUwTaegIog3JJbuH4BbrY9A1ArLjXpy+RWb3mV28F/9Gv1dDA7E2L8kngWva4NWisnLTyfgQ==}
     engines: {node: '>=20'}
 
-  cronstrue@3.21.0:
-    resolution: {integrity: sha512-6DgX87NpjknhNmYC0/JjexQIAwCvtaUNoayqxLsciU5NkwGcEhuXLgXkIOX/bsuXL4f/aaLfgimJ6/2X8c5ezg==}
+  cronstrue@3.23.0:
+    resolution: {integrity: sha512-sIBZcwhpwkarRxfAHctpqGU9RapM7aLg5IktORluDnnUNkaTIIxEfI6S5IQy1isBGyTmgbbz4X6xPqpUgK7l0A==}
     hasBin: true
 
   cross-spawn@7.0.6:
@@ -8724,8 +8725,8 @@ packages:
     resolution: {integrity: sha512-Zf5H2Kxt2xjTvbJvP2ZWLEICxA6j+hAmMzIlypy4xcBg1vKVnx89Wy0GbS+kf5cwCVFFzdCFh2XSCFNULS6csw==}
     engines: {node: '>= 0.4'}
 
-  es-module-lexer@2.1.0:
-    resolution: {integrity: sha512-n27zTYMjYu1aj4MjCWzSP7G9r75utsaoc8m61weK+W8JMBGGQybd43GstCXZ3WNmSFtGT9wi59qQTW6mhTR5LQ==}
+  es-module-lexer@2.2.0:
+    resolution: {integrity: sha512-3lGxdTXCLfe1MYfTz1y2ksAAUM4NAOP6rPEjxGJVKO7TZ5+tvHCaQWGpC4Y3IXvW3ece0Cz1cIP4FWBxOnGCTQ==}
 
   es-object-atoms@1.1.1:
     resolution: {integrity: sha512-FGgH2h8zKNim9ljj7dankFPcICIK9Cp5bm+c2gQSYePhpaG5+esrLODihIorn+Pe6FGJzWhXQotPv73jTaldXA==}
@@ -10144,12 +10145,21 @@ packages:
       zod:
         optional: true
 
-  openai@6.44.0:
-    resolution: {integrity: sha512-09/gH+8jH0RgUwsgWHAaxsKGRT5zVZ95IaJUnqAWj6XejIBmnFRwq2WUIF37VtDEsmGrtPmvCs5+yBSeZGWvkA==}
+  openai@6.45.0:
+    resolution: {integrity: sha512-5DQVNErssk0afNpTTHUm/qZPU4iKR9OYdNid8Ib4puq4gHNNvGWZht2zY4h9a8JMF949Ik6m8gQutllVPbjdnw==}
     peerDependencies:
+      '@aws-sdk/credential-provider-node': '>=3.972.0 <4'
+      '@smithy/hash-node': '>=4.3.0 <5'
+      '@smithy/signature-v4': '>=5.4.0 <6'
       ws: ^8.18.0
       zod: ^3.25 || ^4.0
     peerDependenciesMeta:
+      '@aws-sdk/credential-provider-node':
+        optional: true
+      '@smithy/hash-node':
+        optional: true
+      '@smithy/signature-v4':
+        optional: true
       ws:
         optional: true
       zod:
@@ -11157,6 +11167,9 @@ packages:
   tailwindcss@4.3.1:
     resolution: {integrity: sha512-hk+TB1m+K8CYNrP6rjQaq/Y+4Zylwpa87mLYBKCunwnnQ9p+fHb7kmSfGqyEJoxF/O6CDyABWVFEafNSYKll+Q==}
 
+  tailwindcss@4.3.2:
+    resolution: {integrity: sha512-WtctNNSH8A9jlMIqxzuYumOHU5uGZyRv0Q5svQl+oEPy5w84YpBxdb7MdqyiSPQge5jTJ6zFQLq0PFygdccSBA==}
+
   tapable@2.3.3:
     resolution: {integrity: sha512-uxc/zpqFg6x7C8vOE7lh6Lbda8eEL9zmVm/PLeTPBRhh1xCgdWaQ+J1CUieGpIfm2HdtsUpRv+HshiasBMcc6A==}
     engines: {node: '>=6'}
@@ -11749,8 +11762,8 @@ packages:
     engines: {node: '>=16'}
     hasBin: true
 
-  workers-ai-provider@3.2.1:
-    resolution: {integrity: sha512-VEnwunVpYTJeGAadgsljIQSc3JhBDQ9QYxzTOnq4fcQHguWTpb06MKLd5al7UIb7lxa5XzZm9CdQ9T+EN99Rtw==}
+  workers-ai-provider@3.3.0:
+    resolution: {integrity: sha512-x5GnN07O3O+3qiXzraMRLNbM34gDuQvnn+Xgw4Xqmhka+StgIWQp8dEQZ/70nVd+rOT75dEZ3/c9JGG/kDyzkw==}
     peerDependencies:
       '@ai-sdk/anthropic': ^3.0.0
       '@ai-sdk/google': ^3.0.0
@@ -11962,7 +11975,7 @@ snapshots:
       package-manager-detector: 1.6.0
       tinyexec: 1.2.4
 
-  '@anthropic-ai/sdk@0.104.2(zod@4.4.3)':
+  '@anthropic-ai/sdk@0.106.0(zod@4.4.3)':
     dependencies:
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.0.0
@@ -12004,16 +12017,15 @@ snapshots:
 
   '@asamuzakjp/nwsapi@2.3.9': {}
 
-  '@astrojs/cloudflare@14.0.0(@types/node@26.0.1)(astro@7.0.2(@astrojs/markdown-remark@7.2.0)(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@26.0.1)(aws4fetch@1.0.20)(jiti@2.7.0)(rollup@4.62.2)(tsx@4.22.4)(yaml@2.9.0))(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))(yaml@2.9.0)':
+  '@astrojs/cloudflare@14.0.1(@types/node@26.0.1)(astro@7.0.3(@astrojs/markdown-remark@7.2.0)(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@26.0.1)(aws4fetch@1.0.20)(jiti@2.7.0)(rollup@4.62.2)(tsx@4.22.4)(yaml@2.9.0))(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))(yaml@2.9.0)':
     dependencies:
       '@astrojs/internal-helpers': 0.10.0
       '@astrojs/underscore-redirects': 1.0.3
-      '@cloudflare/vite-plugin': 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))
-      astro: 7.0.2(@astrojs/markdown-remark@7.2.0)(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@26.0.1)(aws4fetch@1.0.20)(jiti@2.7.0)(rollup@4.62.2)(tsx@4.22.4)(yaml@2.9.0)
+      '@cloudflare/vite-plugin': 1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))
+      astro: 7.0.3(@astrojs/markdown-remark@7.2.0)(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@26.0.1)(aws4fetch@1.0.20)(jiti@2.7.0)(rollup@4.62.2)(tsx@4.22.4)(yaml@2.9.0)
       piccolore: 0.1.3
-      tinyglobby: 0.2.17
       vite: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
-      wrangler: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+      wrangler: 4.105.0(@cloudflare/workers-types@4.20260629.1)
     transitivePeerDependencies:
       - '@types/node'
       - '@vitejs/devtools'
@@ -12988,31 +13000,33 @@ snapshots:
 
   '@cloudflare/kv-asset-handler@0.5.0': {}
 
-  '@cloudflare/sandbox@0.12.1(@openai/agents@0.12.0(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3))':
+  '@cloudflare/sandbox@0.12.2(@openai/agents@0.12.0(@aws-sdk/credential-provider-node@3.972.57)(@cfworker/json-schema@4.1.1)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3))':
     dependencies:
       '@cloudflare/containers': 0.3.7
       aws4fetch: 1.0.20
       capnweb: 0.8.0
       hono: 4.12.27
     optionalDependencies:
-      '@openai/agents': 0.12.0(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
+      '@openai/agents': 0.12.0(@aws-sdk/credential-provider-node@3.972.57)(@cfworker/json-schema@4.1.1)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3)
 
-  '@cloudflare/tanstack-ai@0.1.10(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@tanstack/ai-client@0.18.0(@opentelemetry/api@1.9.1))(@tanstack/ai@0.32.0(@opentelemetry/api@1.9.1))(ws@8.21.0)(zod@4.4.3)':
+  '@cloudflare/tanstack-ai@0.2.0(@aws-sdk/credential-provider-node@3.972.57)(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@smithy/signature-v4@5.5.1)(@tanstack/ai@0.38.0(@opentelemetry/api@1.9.1))(ws@8.21.0)(zod@4.4.3)':
     dependencies:
-      '@tanstack/ai': 0.32.0(@opentelemetry/api@1.9.1)
-      openai: 6.44.0(ws@8.21.0)(zod@4.4.3)
+      '@tanstack/ai': 0.38.0(@opentelemetry/api@1.9.1)
+      openai: 6.45.0(@aws-sdk/credential-provider-node@3.972.57)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3)
     optionalDependencies:
-      '@anthropic-ai/sdk': 0.104.2(zod@4.4.3)
-      '@google/genai': 2.9.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))
-      '@openrouter/sdk': 0.12.79
-      '@tanstack/ai-anthropic': 0.15.5(@tanstack/ai@0.32.0(@opentelemetry/api@1.9.1))(zod@4.4.3)
-      '@tanstack/ai-gemini': 0.17.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@tanstack/ai@0.32.0(@opentelemetry/api@1.9.1))
-      '@tanstack/ai-grok': 0.12.2(@tanstack/ai@0.32.0(@opentelemetry/api@1.9.1))(ws@8.21.0)(zod@4.4.3)
-      '@tanstack/ai-openai': 0.15.2(@tanstack/ai-client@0.18.0(@opentelemetry/api@1.9.1))(@tanstack/ai@0.32.0(@opentelemetry/api@1.9.1))(ws@8.21.0)(zod@4.4.3)
-      '@tanstack/ai-openrouter': 0.14.0(@tanstack/ai@0.32.0(@opentelemetry/api@1.9.1))
+      '@anthropic-ai/sdk': 0.106.0(zod@4.4.3)
+      '@google/genai': 2.10.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))
+      '@openrouter/sdk': 0.13.21
+      '@tanstack/ai-anthropic': 0.15.11(@tanstack/ai@0.38.0(@opentelemetry/api@1.9.1))(zod@4.4.3)
+      '@tanstack/ai-gemini': 0.18.3(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@tanstack/ai@0.38.0(@opentelemetry/api@1.9.1))
+      '@tanstack/ai-grok': 0.14.5(@aws-sdk/credential-provider-node@3.972.57)(@smithy/signature-v4@5.5.1)(@tanstack/ai@0.38.0(@opentelemetry/api@1.9.1))(ws@8.21.0)(zod@4.4.3)
+      '@tanstack/ai-openai': 0.15.9(@aws-sdk/credential-provider-node@3.972.57)(@smithy/signature-v4@5.5.1)(@tanstack/ai@0.38.0(@opentelemetry/api@1.9.1))(ws@8.21.0)(zod@4.4.3)
+      '@tanstack/ai-openrouter': 0.15.4(@tanstack/ai@0.38.0(@opentelemetry/api@1.9.1))
     transitivePeerDependencies:
+      - '@aws-sdk/credential-provider-node'
       - '@modelcontextprotocol/sdk'
-      - '@tanstack/ai-client'
+      - '@smithy/hash-node'
+      - '@smithy/signature-v4'
       - bufferutil
       - supports-color
       - utf-8-validate
@@ -13025,20 +13039,20 @@ snapshots:
     optionalDependencies:
       workerd: 1.20260625.1
 
-  '@cloudflare/vite-plugin@1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))':
+  '@cloudflare/vite-plugin@1.42.3(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(workerd@1.20260625.1)(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))':
     dependencies:
       '@cloudflare/unenv-preset': 2.16.1(unenv@2.0.0-rc.24)(workerd@1.20260625.1)
       miniflare: 4.20260625.0
       unenv: 2.0.0-rc.24
       vite: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
-      wrangler: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+      wrangler: 4.105.0(@cloudflare/workers-types@4.20260629.1)
       ws: 8.21.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
       - workerd
 
-  '@cloudflare/vitest-pool-workers@0.16.20(@cloudflare/workers-types@4.20260625.1)(@vitest/runner@4.1.9)(@vitest/snapshot@4.1.9)(vitest@4.1.9)':
+  '@cloudflare/vitest-pool-workers@0.16.20(@cloudflare/workers-types@4.20260629.1)(@vitest/runner@4.1.9)(@vitest/snapshot@4.1.9)(vitest@4.1.9)':
     dependencies:
       '@vitest/runner': 4.1.9
       '@vitest/snapshot': 4.1.9
@@ -13046,7 +13060,7 @@ snapshots:
       esbuild: 0.28.1
       miniflare: 4.20260625.0
       vitest: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@26.0.1)(@vitest/browser-playwright@4.1.9)(jsdom@29.1.1(@noble/hashes@1.8.0))(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
-      wrangler: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+      wrangler: 4.105.0(@cloudflare/workers-types@4.20260629.1)
       zod: 3.25.76
     transitivePeerDependencies:
       - '@cloudflare/workers-types'
@@ -13070,7 +13084,7 @@ snapshots:
 
   '@cloudflare/workers-oauth-provider@0.8.1': {}
 
-  '@cloudflare/workers-types@4.20260625.1': {}
+  '@cloudflare/workers-types@4.20260629.1': {}
 
   '@cspotcode/source-map-support@0.8.1':
     dependencies:
@@ -13361,7 +13375,7 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@google/genai@2.9.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))':
+  '@google/genai@2.10.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))':
     dependencies:
       google-auth-library: 10.7.0
       p-retry: 4.6.2
@@ -13799,22 +13813,25 @@ snapshots:
 
   '@oozcitak/util@10.0.0': {}
 
-  '@openai/agents-core@0.12.0(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)':
+  '@openai/agents-core@0.12.0(@aws-sdk/credential-provider-node@3.972.57)(@cfworker/json-schema@4.1.1)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3)':
     dependencies:
       debug: 4.4.3
-      openai: 6.44.0(ws@8.21.0)(zod@4.4.3)
+      openai: 6.45.0(@aws-sdk/credential-provider-node@3.972.57)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3)
     optionalDependencies:
       '@modelcontextprotocol/sdk': 1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
       zod: 4.4.3
     transitivePeerDependencies:
+      - '@aws-sdk/credential-provider-node'
       - '@cfworker/json-schema'
+      - '@smithy/hash-node'
+      - '@smithy/signature-v4'
       - supports-color
       - ws
 
-  '@openai/agents-extensions@0.12.0(@ai-sdk/provider@3.0.10)(@cfworker/json-schema@4.1.1)(@openai/agents@0.12.0(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3))(ai@6.0.208(zod@4.4.3))(ws@8.21.0)(zod@4.4.3)':
+  '@openai/agents-extensions@0.12.0(@ai-sdk/provider@3.0.10)(@aws-sdk/credential-provider-node@3.972.57)(@cfworker/json-schema@4.1.1)(@openai/agents@0.12.0(@aws-sdk/credential-provider-node@3.972.57)(@cfworker/json-schema@4.1.1)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3))(@smithy/signature-v4@5.5.1)(ai@6.0.208(zod@4.4.3))(ws@8.21.0)(zod@4.4.3)':
     dependencies:
-      '@openai/agents': 0.12.0(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
-      '@openai/agents-core': 0.12.0(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
+      '@openai/agents': 0.12.0(@aws-sdk/credential-provider-node@3.972.57)(@cfworker/json-schema@4.1.1)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3)
+      '@openai/agents-core': 0.12.0(@aws-sdk/credential-provider-node@3.972.57)(@cfworker/json-schema@4.1.1)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3)
       '@types/ws': 8.18.1
       debug: 4.4.3
       ws: 8.21.0
@@ -13823,43 +13840,55 @@ snapshots:
       '@ai-sdk/provider': 3.0.10
       ai: 6.0.208(zod@4.4.3)
     transitivePeerDependencies:
+      - '@aws-sdk/credential-provider-node'
       - '@cfworker/json-schema'
+      - '@smithy/hash-node'
+      - '@smithy/signature-v4'
       - supports-color
 
-  '@openai/agents-openai@0.12.0(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)':
+  '@openai/agents-openai@0.12.0(@aws-sdk/credential-provider-node@3.972.57)(@cfworker/json-schema@4.1.1)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3)':
     dependencies:
-      '@openai/agents-core': 0.12.0(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
+      '@openai/agents-core': 0.12.0(@aws-sdk/credential-provider-node@3.972.57)(@cfworker/json-schema@4.1.1)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3)
       debug: 4.4.3
-      openai: 6.44.0(ws@8.21.0)(zod@4.4.3)
+      openai: 6.45.0(@aws-sdk/credential-provider-node@3.972.57)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3)
       zod: 4.4.3
     transitivePeerDependencies:
+      - '@aws-sdk/credential-provider-node'
       - '@cfworker/json-schema'
+      - '@smithy/hash-node'
+      - '@smithy/signature-v4'
       - supports-color
       - ws
 
-  '@openai/agents-realtime@0.12.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)':
+  '@openai/agents-realtime@0.12.0(@aws-sdk/credential-provider-node@3.972.57)(@cfworker/json-schema@4.1.1)(@smithy/signature-v4@5.5.1)(zod@4.4.3)':
     dependencies:
-      '@openai/agents-core': 0.12.0(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
+      '@openai/agents-core': 0.12.0(@aws-sdk/credential-provider-node@3.972.57)(@cfworker/json-schema@4.1.1)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3)
       '@types/ws': 8.18.1
       debug: 4.4.3
       ws: 8.21.0
       zod: 4.4.3
     transitivePeerDependencies:
+      - '@aws-sdk/credential-provider-node'
       - '@cfworker/json-schema'
+      - '@smithy/hash-node'
+      - '@smithy/signature-v4'
       - bufferutil
       - supports-color
       - utf-8-validate
 
-  '@openai/agents@0.12.0(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)':
+  '@openai/agents@0.12.0(@aws-sdk/credential-provider-node@3.972.57)(@cfworker/json-schema@4.1.1)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3)':
     dependencies:
-      '@openai/agents-core': 0.12.0(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
-      '@openai/agents-openai': 0.12.0(@cfworker/json-schema@4.1.1)(ws@8.21.0)(zod@4.4.3)
-      '@openai/agents-realtime': 0.12.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
+      '@openai/agents-core': 0.12.0(@aws-sdk/credential-provider-node@3.972.57)(@cfworker/json-schema@4.1.1)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3)
+      '@openai/agents-openai': 0.12.0(@aws-sdk/credential-provider-node@3.972.57)(@cfworker/json-schema@4.1.1)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3)
+      '@openai/agents-realtime': 0.12.0(@aws-sdk/credential-provider-node@3.972.57)(@cfworker/json-schema@4.1.1)(@smithy/signature-v4@5.5.1)(zod@4.4.3)
       debug: 4.4.3
-      openai: 6.44.0(ws@8.21.0)(zod@4.4.3)
+      openai: 6.45.0(@aws-sdk/credential-provider-node@3.972.57)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3)
       zod: 4.4.3
     transitivePeerDependencies:
+      - '@aws-sdk/credential-provider-node'
       - '@cfworker/json-schema'
+      - '@smithy/hash-node'
+      - '@smithy/signature-v4'
       - bufferutil
       - supports-color
       - utf-8-validate
@@ -13870,7 +13899,7 @@ snapshots:
       zod: 4.4.3
     optional: true
 
-  '@openrouter/sdk@0.12.79':
+  '@openrouter/sdk@0.13.21':
     dependencies:
       zod: 4.4.3
     optional: true
@@ -14055,7 +14084,7 @@ snapshots:
     dependencies:
       quansync: 1.0.0
 
-  '@react-router/dev@8.0.1(react-router@8.0.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(typescript@6.0.3)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1))':
+  '@react-router/dev@8.0.1(react-router@8.0.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(typescript@6.0.3)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1))':
     dependencies:
       '@babel/core': 7.29.7
       '@babel/generator': 7.29.7
@@ -14070,7 +14099,7 @@ snapshots:
       babel-dead-code-elimination: 1.0.12
       chokidar: 5.0.0
       dedent: 1.7.2
-      es-module-lexer: 2.1.0
+      es-module-lexer: 2.2.0
       exit-hook: 5.1.0
       isbot: 5.1.43
       jsesc: 3.1.0
@@ -14088,7 +14117,7 @@ snapshots:
       vite: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
     optionalDependencies:
       typescript: 6.0.3
-      wrangler: 4.105.0(@cloudflare/workers-types@4.20260625.1)
+      wrangler: 4.105.0(@cloudflare/workers-types@4.20260629.1)
     transitivePeerDependencies:
       - babel-plugin-macros
       - supports-color
@@ -14496,31 +14525,32 @@ snapshots:
       tailwindcss: 4.3.1
       vite: 8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
 
-  '@tanstack/ai-anthropic@0.15.5(@tanstack/ai@0.32.0(@opentelemetry/api@1.9.1))(zod@4.4.3)':
+  '@tanstack/ai-anthropic@0.15.11(@tanstack/ai@0.38.0(@opentelemetry/api@1.9.1))(zod@4.4.3)':
     dependencies:
       '@anthropic-ai/sdk': 0.97.1(zod@4.4.3)
-      '@tanstack/ai': 0.32.0(@opentelemetry/api@1.9.1)
-      '@tanstack/ai-utils': 0.2.2
+      '@tanstack/ai': 0.38.0(@opentelemetry/api@1.9.1)
+      '@tanstack/ai-utils': 0.3.1
       zod: 4.4.3
     optional: true
 
-  '@tanstack/ai-client@0.18.0(@opentelemetry/api@1.9.1)':
+  '@tanstack/ai-client@0.19.0(@opentelemetry/api@1.9.1)':
     dependencies:
-      '@tanstack/ai': 0.32.0(@opentelemetry/api@1.9.1)
-      '@tanstack/ai-event-client': 0.6.3(@tanstack/ai@0.32.0(@opentelemetry/api@1.9.1))
+      '@tanstack/ai': 0.38.0(@opentelemetry/api@1.9.1)
+      '@tanstack/ai-event-client': 0.6.8
+      '@tanstack/ai-utils': 0.3.1
     transitivePeerDependencies:
       - '@opentelemetry/api'
 
-  '@tanstack/ai-event-client@0.6.3(@tanstack/ai@0.32.0(@opentelemetry/api@1.9.1))':
+  '@tanstack/ai-event-client@0.6.8':
     dependencies:
-      '@tanstack/ai': 0.32.0(@opentelemetry/api@1.9.1)
       '@tanstack/devtools-event-client': 0.4.4
 
-  '@tanstack/ai-gemini@0.17.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@tanstack/ai@0.32.0(@opentelemetry/api@1.9.1))':
+  '@tanstack/ai-gemini@0.18.3(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))(@tanstack/ai@0.38.0(@opentelemetry/api@1.9.1))':
     dependencies:
-      '@google/genai': 1.52.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))
-      '@tanstack/ai': 0.32.0(@opentelemetry/api@1.9.1)
-      '@tanstack/ai-utils': 0.2.2
+      '@google/genai': 2.10.0(@modelcontextprotocol/sdk@1.29.0(@cfworker/json-schema@4.1.1)(zod@4.4.3))
+      '@tanstack/ai': 0.38.0(@opentelemetry/api@1.9.1)
+      '@tanstack/ai-utils': 0.3.1
+      partial-json: 0.1.7
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - bufferutil
@@ -14528,53 +14558,58 @@ snapshots:
       - utf-8-validate
     optional: true
 
-  '@tanstack/ai-grok@0.12.2(@tanstack/ai@0.32.0(@opentelemetry/api@1.9.1))(ws@8.21.0)(zod@4.4.3)':
+  '@tanstack/ai-grok@0.14.5(@aws-sdk/credential-provider-node@3.972.57)(@smithy/signature-v4@5.5.1)(@tanstack/ai@0.38.0(@opentelemetry/api@1.9.1))(ws@8.21.0)(zod@4.4.3)':
     dependencies:
-      '@tanstack/ai': 0.32.0(@opentelemetry/api@1.9.1)
-      '@tanstack/ai-utils': 0.2.2
-      '@tanstack/openai-base': 0.8.7(@tanstack/ai@0.32.0(@opentelemetry/api@1.9.1))(ws@8.21.0)(zod@4.4.3)
-      openai: 6.44.0(ws@8.21.0)(zod@4.4.3)
+      '@tanstack/ai': 0.38.0(@opentelemetry/api@1.9.1)
+      '@tanstack/ai-utils': 0.3.1
+      '@tanstack/openai-base': 0.9.5(@aws-sdk/credential-provider-node@3.972.57)(@smithy/signature-v4@5.5.1)(@tanstack/ai@0.38.0(@opentelemetry/api@1.9.1))(ws@8.21.0)(zod@4.4.3)
+      openai: 6.45.0(@aws-sdk/credential-provider-node@3.972.57)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3)
       zod: 4.4.3
     transitivePeerDependencies:
+      - '@aws-sdk/credential-provider-node'
+      - '@smithy/hash-node'
+      - '@smithy/signature-v4'
       - ws
     optional: true
 
-  '@tanstack/ai-openai@0.15.2(@tanstack/ai-client@0.18.0(@opentelemetry/api@1.9.1))(@tanstack/ai@0.32.0(@opentelemetry/api@1.9.1))(ws@8.21.0)(zod@4.4.3)':
+  '@tanstack/ai-openai@0.15.9(@aws-sdk/credential-provider-node@3.972.57)(@smithy/signature-v4@5.5.1)(@tanstack/ai@0.38.0(@opentelemetry/api@1.9.1))(ws@8.21.0)(zod@4.4.3)':
     dependencies:
-      '@tanstack/ai': 0.32.0(@opentelemetry/api@1.9.1)
-      '@tanstack/ai-client': 0.18.0(@opentelemetry/api@1.9.1)
-      '@tanstack/ai-utils': 0.2.2
-      '@tanstack/openai-base': 0.8.7(@tanstack/ai@0.32.0(@opentelemetry/api@1.9.1))(ws@8.21.0)(zod@4.4.3)
-      openai: 6.44.0(ws@8.21.0)(zod@4.4.3)
+      '@tanstack/ai': 0.38.0(@opentelemetry/api@1.9.1)
+      '@tanstack/ai-utils': 0.3.1
+      '@tanstack/openai-base': 0.9.5(@aws-sdk/credential-provider-node@3.972.57)(@smithy/signature-v4@5.5.1)(@tanstack/ai@0.38.0(@opentelemetry/api@1.9.1))(ws@8.21.0)(zod@4.4.3)
+      openai: 6.45.0(@aws-sdk/credential-provider-node@3.972.57)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3)
       zod: 4.4.3
     transitivePeerDependencies:
+      - '@aws-sdk/credential-provider-node'
+      - '@smithy/hash-node'
+      - '@smithy/signature-v4'
       - ws
     optional: true
 
-  '@tanstack/ai-openrouter@0.14.0(@tanstack/ai@0.32.0(@opentelemetry/api@1.9.1))':
+  '@tanstack/ai-openrouter@0.15.4(@tanstack/ai@0.38.0(@opentelemetry/api@1.9.1))':
     dependencies:
       '@openrouter/sdk': 0.12.35
-      '@tanstack/ai': 0.32.0(@opentelemetry/api@1.9.1)
-      '@tanstack/ai-utils': 0.2.2
+      '@tanstack/ai': 0.38.0(@opentelemetry/api@1.9.1)
+      '@tanstack/ai-utils': 0.3.1
     optional: true
 
-  '@tanstack/ai-react@0.15.9(@opentelemetry/api@1.9.1)(@tanstack/ai@0.32.0(@opentelemetry/api@1.9.1))(@types/react@19.2.17)(react@19.2.7)':
+  '@tanstack/ai-react@0.16.0(@opentelemetry/api@1.9.1)(@tanstack/ai@0.38.0(@opentelemetry/api@1.9.1))(@types/react@19.2.17)(react@19.2.7)':
     dependencies:
-      '@tanstack/ai': 0.32.0(@opentelemetry/api@1.9.1)
-      '@tanstack/ai-client': 0.18.0(@opentelemetry/api@1.9.1)
+      '@tanstack/ai': 0.38.0(@opentelemetry/api@1.9.1)
+      '@tanstack/ai-client': 0.19.0(@opentelemetry/api@1.9.1)
       '@types/react': 19.2.17
       react: 19.2.7
     transitivePeerDependencies:
       - '@opentelemetry/api'
 
-  '@tanstack/ai-utils@0.2.2':
-    optional: true
+  '@tanstack/ai-utils@0.3.1': {}
 
-  '@tanstack/ai@0.32.0(@opentelemetry/api@1.9.1)':
+  '@tanstack/ai@0.38.0(@opentelemetry/api@1.9.1)':
     dependencies:
       '@ag-ui/core': 0.0.52
       '@standard-schema/spec': 1.1.0
-      '@tanstack/ai-event-client': 0.6.3(@tanstack/ai@0.32.0(@opentelemetry/api@1.9.1))
+      '@tanstack/ai-event-client': 0.6.8
+      '@tanstack/ai-utils': 0.3.1
       partial-json: 0.1.7
     optionalDependencies:
       '@opentelemetry/api': 1.9.1
@@ -14583,12 +14618,15 @@ snapshots:
 
   '@tanstack/history@1.162.0': {}
 
-  '@tanstack/openai-base@0.8.7(@tanstack/ai@0.32.0(@opentelemetry/api@1.9.1))(ws@8.21.0)(zod@4.4.3)':
+  '@tanstack/openai-base@0.9.5(@aws-sdk/credential-provider-node@3.972.57)(@smithy/signature-v4@5.5.1)(@tanstack/ai@0.38.0(@opentelemetry/api@1.9.1))(ws@8.21.0)(zod@4.4.3)':
     dependencies:
-      '@tanstack/ai': 0.32.0(@opentelemetry/api@1.9.1)
-      '@tanstack/ai-utils': 0.2.2
-      openai: 6.44.0(ws@8.21.0)(zod@4.4.3)
+      '@tanstack/ai': 0.38.0(@opentelemetry/api@1.9.1)
+      '@tanstack/ai-utils': 0.3.1
+      openai: 6.45.0(@aws-sdk/credential-provider-node@3.972.57)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3)
     transitivePeerDependencies:
+      - '@aws-sdk/credential-provider-node'
+      - '@smithy/hash-node'
+      - '@smithy/signature-v4'
       - ws
       - zod
     optional: true
@@ -15048,36 +15086,36 @@ snapshots:
     dependencies:
       '@types/yargs-parser': 21.0.3
 
-  '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260624.1':
+  '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260629.1':
     optional: true
 
-  '@typescript/native-preview-darwin-x64@7.0.0-dev.20260624.1':
+  '@typescript/native-preview-darwin-x64@7.0.0-dev.20260629.1':
     optional: true
 
-  '@typescript/native-preview-linux-arm64@7.0.0-dev.20260624.1':
+  '@typescript/native-preview-linux-arm64@7.0.0-dev.20260629.1':
     optional: true
 
-  '@typescript/native-preview-linux-arm@7.0.0-dev.20260624.1':
+  '@typescript/native-preview-linux-arm@7.0.0-dev.20260629.1':
     optional: true
 
-  '@typescript/native-preview-linux-x64@7.0.0-dev.20260624.1':
+  '@typescript/native-preview-linux-x64@7.0.0-dev.20260629.1':
     optional: true
 
-  '@typescript/native-preview-win32-arm64@7.0.0-dev.20260624.1':
+  '@typescript/native-preview-win32-arm64@7.0.0-dev.20260629.1':
     optional: true
 
-  '@typescript/native-preview-win32-x64@7.0.0-dev.20260624.1':
+  '@typescript/native-preview-win32-x64@7.0.0-dev.20260629.1':
     optional: true
 
-  '@typescript/native-preview@7.0.0-dev.20260624.1':
+  '@typescript/native-preview@7.0.0-dev.20260629.1':
     optionalDependencies:
-      '@typescript/native-preview-darwin-arm64': 7.0.0-dev.20260624.1
-      '@typescript/native-preview-darwin-x64': 7.0.0-dev.20260624.1
-      '@typescript/native-preview-linux-arm': 7.0.0-dev.20260624.1
-      '@typescript/native-preview-linux-arm64': 7.0.0-dev.20260624.1
-      '@typescript/native-preview-linux-x64': 7.0.0-dev.20260624.1
-      '@typescript/native-preview-win32-arm64': 7.0.0-dev.20260624.1
-      '@typescript/native-preview-win32-x64': 7.0.0-dev.20260624.1
+      '@typescript/native-preview-darwin-arm64': 7.0.0-dev.20260629.1
+      '@typescript/native-preview-darwin-x64': 7.0.0-dev.20260629.1
+      '@typescript/native-preview-linux-arm': 7.0.0-dev.20260629.1
+      '@typescript/native-preview-linux-arm64': 7.0.0-dev.20260629.1
+      '@typescript/native-preview-linux-x64': 7.0.0-dev.20260629.1
+      '@typescript/native-preview-win32-arm64': 7.0.0-dev.20260629.1
+      '@typescript/native-preview-win32-x64': 7.0.0-dev.20260629.1
 
   '@typescript/vfs@1.6.4(typescript@6.0.3)':
     dependencies:
@@ -15191,13 +15229,13 @@ snapshots:
 
   '@workflow/serde@4.1.0-beta.2': {}
 
-  '@x402/core@2.16.0':
+  '@x402/core@2.17.0':
     dependencies:
       zod: 3.25.76
 
-  '@x402/evm@2.16.0(typescript@6.0.3)':
+  '@x402/evm@2.17.0(typescript@6.0.3)':
     dependencies:
-      '@x402/core': 2.16.0
+      '@x402/core': 2.17.0
       viem: 2.53.1(typescript@6.0.3)(zod@3.25.76)
       zod: 3.25.76
     transitivePeerDependencies:
@@ -15205,12 +15243,12 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@x402/extensions@2.16.0(typescript@6.0.3)':
+  '@x402/extensions@2.17.0(typescript@6.0.3)':
     dependencies:
       '@noble/curves': 1.9.7
       '@scure/base': 1.2.6
       '@signinwithethereum/siwe': 4.2.0(viem@2.53.1(typescript@6.0.3)(zod@4.4.3))
-      '@x402/core': 2.16.0
+      '@x402/core': 2.17.0
       ajv: 8.20.0
       jose: 5.10.0
       tweetnacl: 1.0.3
@@ -15222,14 +15260,14 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@x402/fetch@2.16.0':
+  '@x402/fetch@2.17.0':
     dependencies:
-      '@x402/core': 2.16.0
+      '@x402/core': 2.17.0
 
-  '@x402/hono@2.16.0(hono@4.12.27)(typescript@6.0.3)':
+  '@x402/hono@2.17.0(hono@4.12.27)(typescript@6.0.3)':
     dependencies:
-      '@x402/core': 2.16.0
-      '@x402/extensions': 2.16.0(typescript@6.0.3)
+      '@x402/core': 2.17.0
+      '@x402/extensions': 2.17.0(typescript@6.0.3)
       hono: 4.12.27
     transitivePeerDependencies:
       - bufferutil
@@ -15364,7 +15402,7 @@ snapshots:
 
   astral-regex@2.0.0: {}
 
-  astro@7.0.2(@astrojs/markdown-remark@7.2.0)(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@26.0.1)(aws4fetch@1.0.20)(jiti@2.7.0)(rollup@4.62.2)(tsx@4.22.4)(yaml@2.9.0):
+  astro@7.0.3(@astrojs/markdown-remark@7.2.0)(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@26.0.1)(aws4fetch@1.0.20)(jiti@2.7.0)(rollup@4.62.2)(tsx@4.22.4)(yaml@2.9.0):
     dependencies:
       '@astrojs/compiler-rs': 0.2.3(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)
       '@astrojs/internal-helpers': 0.10.0
@@ -15384,7 +15422,7 @@ snapshots:
       devalue: 5.8.1
       diff: 8.0.4
       dset: 3.1.4
-      es-module-lexer: 2.1.0
+      es-module-lexer: 2.2.0
       esbuild: 0.28.1
       flattie: 1.1.1
       fontace: 0.4.1
@@ -15787,7 +15825,7 @@ snapshots:
 
   cron-schedule@6.0.0: {}
 
-  cronstrue@3.21.0: {}
+  cronstrue@3.23.0: {}
 
   cross-spawn@7.0.6:
     dependencies:
@@ -16192,7 +16230,7 @@ snapshots:
 
   es-errors@1.3.0: {}
 
-  es-module-lexer@2.1.0: {}
+  es-module-lexer@2.2.0: {}
 
   es-object-atoms@1.1.1:
     dependencies:
@@ -18026,8 +18064,10 @@ snapshots:
       ws: 8.21.0
       zod: 4.4.3
 
-  openai@6.44.0(ws@8.21.0)(zod@4.4.3):
+  openai@6.45.0(@aws-sdk/credential-provider-node@3.972.57)(@smithy/signature-v4@5.5.1)(ws@8.21.0)(zod@4.4.3):
     optionalDependencies:
+      '@aws-sdk/credential-provider-node': 3.972.57
+      '@smithy/signature-v4': 5.5.1
       ws: 8.21.0
       zod: 4.4.3
 
@@ -18199,9 +18239,9 @@ snapshots:
 
   partial-json@0.1.7: {}
 
-  partyserver@0.5.8(@cloudflare/workers-types@4.20260625.1):
+  partyserver@0.5.8(@cloudflare/workers-types@4.20260629.1):
     dependencies:
-      '@cloudflare/workers-types': 4.20260625.1
+      '@cloudflare/workers-types': 4.20260629.1
       nanoid: 5.1.16
 
   partysocket@1.3.0(react@19.2.7):
@@ -18690,7 +18730,7 @@ snapshots:
 
   robust-predicates@3.0.3: {}
 
-  rolldown-plugin-dts@0.26.0(@typescript/native-preview@7.0.0-dev.20260624.1)(rolldown@1.1.2)(typescript@6.0.3):
+  rolldown-plugin-dts@0.26.0(@typescript/native-preview@7.0.0-dev.20260629.1)(rolldown@1.1.2)(typescript@6.0.3):
     dependencies:
       '@babel/generator': 8.0.0
       '@babel/helper-validator-identifier': 8.0.2
@@ -18702,7 +18742,7 @@ snapshots:
       obug: 2.1.3
       rolldown: 1.1.2
     optionalDependencies:
-      '@typescript/native-preview': 7.0.0-dev.20260624.1
+      '@typescript/native-preview': 7.0.0-dev.20260629.1
       typescript: 6.0.3
     transitivePeerDependencies:
       - oxc-resolver
@@ -19225,6 +19265,8 @@ snapshots:
 
   tailwindcss@4.3.1: {}
 
+  tailwindcss@4.3.2: {}
+
   tapable@2.3.3: {}
 
   tar-fs@2.1.4:
@@ -19361,7 +19403,7 @@ snapshots:
       minimist: 1.2.8
       strip-bom: 3.0.0
 
-  tsdown@0.22.3(@typescript/native-preview@7.0.0-dev.20260624.1)(tsx@4.22.4)(typescript@6.0.3):
+  tsdown@0.22.3(@typescript/native-preview@7.0.0-dev.20260629.1)(tsx@4.22.4)(typescript@6.0.3):
     dependencies:
       ansis: 4.3.1
       cac: 7.0.0
@@ -19372,7 +19414,7 @@ snapshots:
       obug: 2.1.3
       picomatch: 4.0.4
       rolldown: 1.1.2
-      rolldown-plugin-dts: 0.26.0(@typescript/native-preview@7.0.0-dev.20260624.1)(rolldown@1.1.2)(typescript@6.0.3)
+      rolldown-plugin-dts: 0.26.0(@typescript/native-preview@7.0.0-dev.20260629.1)(rolldown@1.1.2)(typescript@6.0.3)
       semver: 7.8.5
       tinyexec: 1.2.4
       tinyglobby: 0.2.17
@@ -19650,7 +19692,7 @@ snapshots:
       '@vitest/snapshot': 4.1.9
       '@vitest/spy': 4.1.9
       '@vitest/utils': 4.1.9
-      es-module-lexer: 2.1.0
+      es-module-lexer: 2.2.0
       expect-type: 1.3.0
       magic-string: 0.30.21
       obug: 2.1.3
@@ -19680,7 +19722,7 @@ snapshots:
       '@vitest/snapshot': 4.1.9
       '@vitest/spy': 4.1.9
       '@vitest/utils': 4.1.9
-      es-module-lexer: 2.1.0
+      es-module-lexer: 2.2.0
       expect-type: 1.3.0
       magic-string: 0.30.21
       obug: 2.1.3
@@ -19777,7 +19819,7 @@ snapshots:
       '@cloudflare/workerd-linux-arm64': 1.20260625.1
       '@cloudflare/workerd-windows-64': 1.20260625.1
 
-  workers-ai-provider@3.2.1(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3)):
+  workers-ai-provider@3.3.0(@ai-sdk/anthropic@3.0.85(zod@4.4.3))(@ai-sdk/google@3.0.83(zod@4.4.3))(@ai-sdk/openai@3.0.74(zod@4.4.3))(@ai-sdk/provider@3.0.10)(ai@6.0.208(zod@4.4.3)):
     dependencies:
       '@ai-sdk/provider': 3.0.10
       ai: 6.0.208(zod@4.4.3)
@@ -19786,7 +19828,7 @@ snapshots:
       '@ai-sdk/google': 3.0.83(zod@4.4.3)
       '@ai-sdk/openai': 3.0.74(zod@4.4.3)
 
-  wrangler@4.105.0(@cloudflare/workers-types@4.20260625.1):
+  wrangler@4.105.0(@cloudflare/workers-types@4.20260629.1):
     dependencies:
       '@cloudflare/kv-asset-handler': 0.5.0
       '@cloudflare/unenv-preset': 2.16.1(unenv@2.0.0-rc.24)(workerd@1.20260625.1)
@@ -19797,7 +19839,7 @@ snapshots:
       unenv: 2.0.0-rc.24
       workerd: 1.20260625.1
     optionalDependencies:
-      '@cloudflare/workers-types': 4.20260625.1
+      '@cloudflare/workers-types': 4.20260629.1
       fsevents: 2.3.3
     transitivePeerDependencies:
       - bufferutil
