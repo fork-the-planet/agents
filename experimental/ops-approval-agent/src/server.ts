@@ -24,11 +24,6 @@ import { Think } from "@cloudflare/think";
 import { jsonSchema, tool, type ToolSet } from "ai";
 import type { ThinkScheduledTasks } from "@cloudflare/think";
 
-type Env = {
-  AI: Ai;
-  OpsApprovalAgent: DurableObjectNamespace<OpsApprovalAgent>;
-};
-
 type OpsState = {
   /**
    * Permission scopes granted to this agent for now. Read at the top of every

@@ -8,14 +8,6 @@ import telegramMessenger from "@cloudflare/think/messengers/telegram";
 
 export { ThinkMessengerStateAgent };
 
-type Env = {
-  AI: Ai;
-  SupportAgent: DurableObjectNamespace<SupportAgent>;
-  TELEGRAM_BOT_TOKEN: string;
-  TELEGRAM_BOT_USERNAME?: string;
-  TELEGRAM_WEBHOOK_SECRET_TOKEN: string;
-};
-
 const AGENT_NAME = "default";
 const TELEGRAM_WEBHOOK_PATH = "/messengers/telegram/webhook";
 

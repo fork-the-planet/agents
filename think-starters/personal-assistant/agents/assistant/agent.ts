@@ -1,10 +1,6 @@
 import { Think } from "@cloudflare/think";
 import type { Session, ThinkScheduledTasks } from "@cloudflare/think";
 
-type Env = Cloudflare.Env & {
-  AI: Ai;
-};
-
 /**
  * A personal assistant with durable memory and proactive scheduled tasks.
  *

@@ -2,12 +2,6 @@ import { callable, routeAgentRequest } from "agents";
 import { Think, skills } from "@cloudflare/think";
 import bundledSkills from "agents:skills";
 
-type Env = {
-  AI: Ai;
-  LOADER: WorkerLoader;
-  SkillsAgent: DurableObjectNamespace<SkillsAgent>;
-};
-
 export class SkillsAgent extends Think<Env> {
   getModel() {
     return "@cf/moonshotai/kimi-k2.7-code";

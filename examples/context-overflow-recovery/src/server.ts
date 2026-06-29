@@ -5,11 +5,6 @@ import {
   type Session
 } from "@cloudflare/think";
 
-type Env = {
-  AI: Ai;
-  ContextOverflowAgent: DurableObjectNamespace<ContextOverflowAgent>;
-};
-
 type CompactionEntry = {
   at: number;
   removed: number;

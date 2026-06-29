@@ -2,10 +2,6 @@ import { Think } from "@cloudflare/think";
 import { tool } from "ai";
 import { z } from "zod";
 
-type Env = Cloudflare.Env & {
-  AI: Ai;
-};
-
 /**
  * An event-processing agent fed by inbound webhooks.
  *

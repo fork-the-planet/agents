@@ -20,15 +20,6 @@ import { Think } from "@cloudflare/think";
 import { streamText, convertToModelMessages, type LanguageModel } from "ai";
 import type { UIMessage } from "ai";
 
-type Env = {
-  LiveChatAgent: DurableObjectNamespace<LiveChatAgent>;
-  LiveThinkAgent: DurableObjectNamespace<LiveThinkAgent>;
-  AI: Ai;
-  LLM_PROVIDER?: string;
-  OPENAI_API_KEY?: string;
-  ANTHROPIC_API_KEY?: string;
-};
-
 /** Shared provider switch backing both the ai-chat and think agents. */
 function resolveModel(env: Env): LanguageModel {
   const provider = (env.LLM_PROVIDER ?? "workers-ai").toLowerCase();

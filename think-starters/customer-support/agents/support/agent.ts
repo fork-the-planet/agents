@@ -3,11 +3,6 @@ import bundledSkills from "agents:skills";
 import { tool } from "ai";
 import { z } from "zod";
 
-type Env = Cloudflare.Env & {
-  AI: Ai;
-  LOADER: WorkerLoader;
-};
-
 /**
  * A customer support agent.
  *

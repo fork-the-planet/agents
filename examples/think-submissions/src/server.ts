@@ -6,11 +6,6 @@ import type {
   ThinkSubmissionStatus
 } from "@cloudflare/think";
 
-type Env = {
-  AI: Ai;
-  TaskAgent: DurableObjectNamespace<TaskAgent>;
-};
-
 export class TaskAgent extends Think<Env> {
   getModel() {
     return "@cf/moonshotai/kimi-k2.7-code";

@@ -3,10 +3,6 @@ import type { ThinkScheduledTasks } from "@cloudflare/think";
 import { tool } from "ai";
 import { z } from "zod";
 
-type Env = Cloudflare.Env & {
-  AI: Ai;
-};
-
 /**
  * A back-office operations agent that runs a real business process: look up an
  * account, then take an action that needs human sign-off.

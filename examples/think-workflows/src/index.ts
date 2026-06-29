@@ -5,11 +5,6 @@ import { ThinkWorkflow } from "@cloudflare/think/workflows";
 import type { ThinkWorkflowStep } from "@cloudflare/think/workflows";
 import type { AgentWorkflowEvent } from "agents/workflows";
 
-type Env = {
-  AI: Ai;
-  ReportAgent: DurableObjectNamespace<ReportAgent>;
-};
-
 type ReportParams = {
   reportId: string;
   topic: string;

@@ -1,9 +1,5 @@
 import { Think } from "@cloudflare/think";
 
-type Env = Cloudflare.Env & {
-  AI: Ai;
-};
-
 /**
  * A minimal Think agent.
  *

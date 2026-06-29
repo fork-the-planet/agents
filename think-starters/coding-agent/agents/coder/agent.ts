@@ -2,11 +2,6 @@ import { Think, skills } from "@cloudflare/think";
 import { createExecuteTool } from "@cloudflare/think/tools/execute";
 import bundledSkills from "agents:skills";
 
-type Env = Cloudflare.Env & {
-  AI: Ai;
-  LOADER: WorkerLoader;
-};
-
 /**
  * A coding agent.
  *
